@@ -1,0 +1,15 @@
+name = "relateos-ai-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-04-08"
+
+[env.production]
+route = "https://relateos-ai-proxy.relateos.workers.dev/*"
+vars = { ENVIRONMENT = "production" }
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_STORE"
+id = "YOUR_KV_NAMESPACE_ID"
+preview_id = "YOUR_PREVIEW_KV_NAMESPACE_ID"
+
+[secrets]
+GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"

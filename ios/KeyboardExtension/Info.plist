@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- NSExtension Declaration -->
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <!-- Full-access keyboard (required for network calls) -->
+            <key>IsASCIICapable</key>
+            <false/>
+            <key>PrefersRightToLeft</key>
+            <false/>
+            <key>PrimaryLanguage</key>
+            <string>zh-Hans</string>
+            <key>RequestsOpenAccess</key>
+            <true/>
+        </dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.keyboard-service</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>$(PRODUCT_MODULE_NAME).RelateOSKeyboardViewController</string>
+    </dict>
+
+    <!-- App Group for shared data with main app -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.relateos.keyboard</string>
+    </array>
+
+    <!-- Localization -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_HK</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>RelateOS Keyboard</string>
+
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <!-- Memory limit: extension target must stay under 40 MB -->
+    <!-- Set in Xcode: MARKETING_VERSION, memory limit enforced at build time -->
+
+    <!-- Privacy usage descriptions (inherited from host app, but defined here for completeness) -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -1,0 +1,23 @@
+{
+  "name": "relateos-ai-proxy",
+  "version": "0.1.0",
+  "description": "RelateOS Cloudflare Workers proxy for AI routing and PII redaction",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler publish",
+    "deploy:prod": "wrangler publish --env production",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "wrangler": "^3.45.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
