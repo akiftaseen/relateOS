@@ -20,6 +20,43 @@ struct User: Codable, Identifiable {
     let onboardingComplete: Bool
 }
 
+private struct CapturedConversationMessage: Codable, Identifiable {
+    let id: String
+    let text: String
+    let isOutgoing: Bool
+    let timestamp: Date
+    let detectedLanguage: String?
+}
+
+enum WisdomPostCategory: String, Codable, CaseIterable {
+    case advice
+    case experience
+    case question
+    case reflection
+}
+
+struct WisdomPost: Codable, Identifiable {
+    let id: UUID
+    let anonymousHandle: String
+    let content: String
+    let redactedContent: String
+    let upvotes: Int
+    let replies: Int
+    let createdAt: Date
+    let category: WisdomPostCategory
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case anonymousHandle = "anonymous_handle"
+        case content
+        case redactedContent = "redacted_content"
+        case upvotes
+        case replies
+        case createdAt = "created_at"
+        case category
+    }
+}
+
 enum AppError: LocalizedError {
     case authenticationFailed(String)
     case networkError(String)
@@ -40,6 +77,60 @@ enum AppError: LocalizedError {
     }
 }
 
+// MARK: - ========== APP BACKEND ==========
+
+enum AppRuntimeConfig {
+    static var localOnlyMode: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "RELATEOS_LOCAL_TEST_MODE") as? Bool ?? false
+    }
+}
+
+enum AppBackendConfig {
+    static var workerURL: String {
+        Bundle.main.object(forInfoDictionaryKey: "RELATEOS_WORKER_URL") as? String ?? "https://relateos-ai-proxy.relateos.workers.dev"
+    }
+
+    static var wisdomPostsURL: URL? {
+        guard !AppRuntimeConfig.localOnlyMode else { return nil }
+        return URL(string: "\(workerURL)/api/v1/wisdom/posts")
+    }
+}
+
+func wisdomCircleMockPosts() -> [WisdomPost] {
+    [
+        WisdomPost(
+            id: UUID(),
+            anonymousHandle: "Seeker7",
+            content: "How do you handle disagreements when emotions are high?",
+            redactedContent: "How do you handle disagreements when emotions are high?",
+            upvotes: 24,
+            replies: 8,
+            createdAt: Date().addingTimeInterval(-3600),
+            category: .question
+        ),
+        WisdomPost(
+            id: UUID(),
+            anonymousHandle: "Listener42",
+            content: "Learning to listen before reacting changed everything for me.",
+            redactedContent: "Learning to listen before reacting changed everything for me.",
+            upvotes: 156,
+            replies: 23,
+            createdAt: Date().addingTimeInterval(-7200),
+            category: .advice
+        ),
+        WisdomPost(
+            id: UUID(),
+            anonymousHandle: "Wanderer19",
+            content: "After years of small misunderstandings, we finally talked honestly.",
+            redactedContent: "After years of small misunderstandings, we finally talked honestly.",
+            upvotes: 89,
+            replies: 12,
+            createdAt: Date().addingTimeInterval(-86400),
+            category: .experience
+        )
+    ]
+}
+
 // MARK: - ========== SUPABASE LAYER ==========
 
 enum NativeSupabaseConfig {
@@ -52,7 +143,11 @@ enum NativeSupabaseConfig {
     }
 
     static var isConfigured: Bool {
-        !url.isEmpty && !publishableKey.isEmpty && !url.hasPrefix("YOUR_") && !publishableKey.hasPrefix("YOUR_")
+        !AppRuntimeConfig.localOnlyMode
+            && !url.isEmpty
+            && !publishableKey.isEmpty
+            && !url.hasPrefix("YOUR_")
+            && !publishableKey.hasPrefix("YOUR_")
     }
 }
 
@@ -329,6 +424,8 @@ final class AuthenticationService: ObservableObject {
     @Published var currentUser: User?
     @Published var isAuthenticated = false
     private let supabaseService = NativeSupabaseService()
+    private let localUserKey = "relateos_local_user"
+    private let localDefaults = UserDefaults.standard
     
     init() {
         checkAuthStatus()
@@ -358,6 +455,7 @@ final class AuthenticationService: ObservableObject {
         
         currentUser = newUser
         isAuthenticated = true
+        cacheLocalUserIfNeeded(newUser)
         return newUser
     }
     
@@ -385,6 +483,7 @@ final class AuthenticationService: ObservableObject {
         
         currentUser = user
         isAuthenticated = true
+        cacheLocalUserIfNeeded(user)
         return user
     }
 
@@ -406,21 +505,44 @@ final class AuthenticationService: ObservableObject {
             language: language,
             onboardingComplete: true
         )
+        if let updated = currentUser {
+            cacheLocalUserIfNeeded(updated)
+        }
     }
     
     func signOut() async throws {
         await supabaseService.clearSession()
+        localDefaults.removeObject(forKey: localUserKey)
         currentUser = nil
         isAuthenticated = false
     }
     
     private func checkAuthStatus() {
+        if AppRuntimeConfig.localOnlyMode {
+            if let cached = localCachedUser() {
+                currentUser = cached
+                isAuthenticated = true
+            }
+            return
+        }
+
         Task { @MainActor in
             if let cached = await supabaseService.getCachedUser() {
                 currentUser = cached
                 isAuthenticated = true
             }
         }
+    }
+
+    private func cacheLocalUserIfNeeded(_ user: User) {
+        guard AppRuntimeConfig.localOnlyMode else { return }
+        guard let data = try? JSONEncoder().encode(user) else { return }
+        localDefaults.set(data, forKey: localUserKey)
+    }
+
+    private func localCachedUser() -> User? {
+        guard let data = localDefaults.data(forKey: localUserKey) else { return nil }
+        return try? JSONDecoder().decode(User.self, from: data)
     }
     
     private func isValidEmail(_ email: String) -> Bool {
@@ -541,6 +663,14 @@ struct AuthenticationView: View {
                     Text(showSignUp ? "Create Account" : "Welcome Back")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.gray)
+
+                    if AppRuntimeConfig.localOnlyMode {
+                        Text("Local test mode enabled: auth and community run on-device")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.cyan)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    }
                 }
                 .padding(.top, 32)
                 
@@ -704,6 +834,8 @@ struct OnboardingView: View {
 
 struct DashboardView: View {
     @State private var score = 72.0
+    @State private var recentMessages: [CapturedConversationMessage] = []
+    private let refreshTimer = Timer.publish(every: 1.2, on: .main, in: .common).autoconnect()
     
     var body: some View {
         ZStack {
@@ -729,14 +861,98 @@ struct DashboardView: View {
                     }
                 }
                 .padding(24)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Live Keyboard Capture")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+
+                        Spacer()
+
+                        Text("Best effort")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.cyan.opacity(0.14))
+                            .clipShape(Capsule())
+                    }
+
+                    Text("Shows text available from keyboard context. Some apps may limit incoming history visibility.")
+                        .font(.system(size: 12, weight: .light))
+                        .foregroundColor(.gray)
+
+                    if recentMessages.isEmpty {
+                        Text("No captured messages yet. Type in a chat app with the RelateOS keyboard enabled.")
+                            .font(.system(size: 12, weight: .light))
+                            .foregroundColor(.white.opacity(0.72))
+                            .padding(.vertical, 6)
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 8) {
+                                ForEach(recentMessages) { message in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Text(message.isOutgoing ? "You" : "Other")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(message.isOutgoing ? .cyan : .white.opacity(0.85))
+                                            .frame(width: 42, alignment: .leading)
+
+                                        Text(message.text)
+                                            .font(.system(size: 12, weight: .regular))
+                                            .foregroundColor(.white)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .lineLimit(3)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.06))
+                                    .cornerRadius(10)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 180)
+                    }
+                }
+                .padding(14)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(14)
+                .padding(.horizontal, 16)
+
                 
                 Spacer()
             }
         }
+        .onAppear {
+            refreshCapturedMessages()
+        }
+        .onReceive(refreshTimer) { _ in
+            refreshCapturedMessages()
+        }
+    }
+
+    private func refreshCapturedMessages() {
+        guard let defaults = UserDefaults(suiteName: "group.com.relateos.keyboard"),
+              let data = defaults.data(forKey: "message_history") else {
+            recentMessages = []
+            return
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = (try? decoder.decode([CapturedConversationMessage].self, from: data)) ?? []
+        recentMessages = Array(decoded.suffix(8))
     }
 }
 
 struct WisdomCircleView: View {
+    @State private var posts: [WisdomPost] = []
+    @State private var selectedCategory: WisdomPostCategory? = nil
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var showCreateSheet = false
+    @State private var feedStatus = "Connecting to community feed"
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -749,13 +965,513 @@ struct WisdomCircleView: View {
             )
             .ignoresSafeArea()
             
-            VStack {
-                Text("Wisdom Circle").font(.system(size: 28, weight: .bold)).foregroundColor(.white).padding()
-                Spacer()
-                Text("Coming Soon").font(.system(size: 16)).foregroundColor(.gray)
-                Spacer()
+            VStack(spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Wisdom Circle")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(.white)
+
+                        Text("Anonymous community reflections")
+                            .font(.system(size: 14, weight: .light))
+                            .foregroundColor(.gray)
+                    }
+
+                    Spacer()
+
+                    Button(action: { showCreateSheet = true }) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.cyan)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+
+                HStack(spacing: 10) {
+                    Label(feedStatus, systemImage: isLoading ? "arrow.triangle.2.circlepath" : "sparkles")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.cyan)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.cyan.opacity(0.12))
+                        .clipShape(Capsule())
+
+                    Text("\(filteredPosts.count) posts")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.82))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(Capsule())
+
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        categoryChip(title: "All", isSelected: selectedCategory == nil) {
+                            selectedCategory = nil
+                        }
+
+                        ForEach(WisdomPostCategory.allCases, id: \.self) { category in
+                            categoryChip(title: category.rawValue.capitalized, isSelected: selectedCategory == category) {
+                                selectedCategory = category
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+
+                if isLoading {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        ProgressView().tint(.cyan)
+                        Text("Loading live posts")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .padding(.horizontal, 16)
+                    Spacer()
+                } else if filteredPosts.isEmpty {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        Image(systemName: "bubble.right")
+                            .font(.system(size: 40))
+                            .foregroundColor(.cyan.opacity(0.85))
+
+                        Text("No posts yet")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
+
+                        Text("Be the first to share something useful, honest, or reflective.")
+                            .font(.system(size: 14, weight: .light))
+                            .foregroundColor(.white.opacity(0.68))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 28)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .padding(.horizontal, 16)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(filteredPosts) { post in
+                                WisdomPostCardView(post: post) { postId in
+                                    Task { await upvote(postId: postId) }
+                                }
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 12, weight: .light))
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 16)
+                }
             }
         }
+        .sheet(isPresented: $showCreateSheet) {
+            CreateWisdomPostView { content, category in
+                Task { await submitPost(content: content, category: category) }
+            }
+        }
+        .task {
+            await loadPosts()
+        }
+        .onChange(of: selectedCategory) { _ in }
+    }
+
+    private var filteredPosts: [WisdomPost] {
+        guard let selectedCategory else { return posts }
+        return posts.filter { $0.category == selectedCategory }
+    }
+
+    private func categoryChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(isSelected ? .black : .white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isSelected ? Color.cyan : Color.white.opacity(0.1))
+                .cornerRadius(8)
+        }
+    }
+
+    private func loadPosts() async {
+        isLoading = true
+        errorMessage = nil
+        feedStatus = "Connecting to community feed"
+
+        if AppRuntimeConfig.localOnlyMode {
+            posts = wisdomCircleMockPosts()
+            feedStatus = "Local test mode"
+            isLoading = false
+            return
+        }
+
+        do {
+            let service = WisdomCircleService()
+            let loadedPosts = try await service.fetchPosts()
+            posts = loadedPosts
+            feedStatus = "Live feed connected"
+        } catch {
+            posts = wisdomCircleMockPosts()
+            errorMessage = "Showing local Wisdom Circle sample data"
+            feedStatus = "Local sample data"
+        }
+
+        isLoading = false
+    }
+
+    private func submitPost(content: String, category: WisdomPostCategory) async {
+        do {
+            let service = WisdomCircleService()
+            let post = try await service.createPost(content: content, category: category)
+            posts.insert(post, at: 0)
+        } catch {
+            errorMessage = "Could not submit post right now"
+        }
+    }
+
+    private func upvote(postId: UUID) async {
+        do {
+            let service = WisdomCircleService()
+            try await service.upvotePost(id: postId)
+            if let index = posts.firstIndex(where: { $0.id == postId }) {
+                posts[index] = WisdomPost(
+                    id: posts[index].id,
+                    anonymousHandle: posts[index].anonymousHandle,
+                    content: posts[index].content,
+                    redactedContent: posts[index].redactedContent,
+                    upvotes: posts[index].upvotes + 1,
+                    replies: posts[index].replies,
+                    createdAt: posts[index].createdAt,
+                    category: posts[index].category
+                )
+            }
+        } catch {
+            errorMessage = "Could not upvote right now"
+        }
+    }
+
+}
+
+private struct WisdomPostCardView: View {
+    let post: WisdomPost
+    let onUpvote: (UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.cyan.opacity(0.25))
+                    .frame(width: 32, height: 32)
+                    .overlay(
+                        Text(String(post.anonymousHandle.prefix(1)))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.cyan)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(post.anonymousHandle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+
+                    Text(post.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.system(size: 12, weight: .light))
+                        .foregroundColor(.gray)
+                }
+
+                Spacer()
+
+                Text(post.category.rawValue.capitalized)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(6)
+            }
+
+            Text(post.redactedContent)
+                .font(.system(size: 14, weight: .light))
+                .foregroundColor(.white)
+                .lineLimit(4)
+
+            HStack(spacing: 18) {
+                Button(action: { onUpvote(post.id) }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.thumbsup")
+                        Text("\(post.upvotes)")
+                    }
+                    .foregroundColor(.cyan)
+                }
+
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.right")
+                    Text("\(post.replies)")
+                }
+                .foregroundColor(.gray)
+
+                Spacer()
+            }
+            .font(.system(size: 12, weight: .semibold))
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(14)
+    }
+}
+
+private struct CreateWisdomPostView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var content = ""
+    @State private var category: WisdomPostCategory = .advice
+    @State private var isSubmitting = false
+
+    let onSubmit: (String, WisdomPostCategory) -> Void
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color(red: 0.06, green: 0.08, blue: 0.16),
+                        Color(red: 0.09, green: 0.13, blue: 0.25)
+                    ]),
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+                VStack(spacing: 16) {
+                    Picker("Category", selection: $category) {
+                        ForEach(WisdomPostCategory.allCases, id: \.self) { category in
+                            Text(category.rawValue.capitalized).tag(category)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+
+                    TextEditor(text: $content)
+                        .padding(12)
+                        .frame(minHeight: 180)
+                        .background(Color.white.opacity(0.08))
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+
+                    Button(action: submit) {
+                        if isSubmitting {
+                            ProgressView().tint(.black)
+                        } else {
+                            Text("Share with Community")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(Color.cyan)
+                    .foregroundColor(.black)
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
+
+                    Spacer()
+                }
+                .padding(.top, 24)
+            }
+            .navigationTitle("New Post")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func submit() {
+        isSubmitting = true
+        onSubmit(content, category)
+        isSubmitting = false
+        dismiss()
+    }
+}
+
+private actor WisdomCircleService {
+    private struct WisdomPostResponse: Decodable {
+        let id: String
+        let anonymousHandle: String
+        let content: String
+        let redactedContent: String
+        let upvotes: Int
+        let replies: Int
+        let createdAt: Date
+        let category: WisdomPostCategory
+
+        private enum CodingKeys: String, CodingKey {
+            case id
+            case anonymousHandle = "anonymous_handle"
+            case content
+            case redactedContent = "redacted_content"
+            case upvotes
+            case replies
+            case createdAt = "created_at"
+            case category
+        }
+    }
+
+    private func request(path: String, method: String, body: [String: Any]? = nil) async throws -> URLRequest {
+        guard let baseURL = AppBackendConfig.wisdomPostsURL else {
+            throw AppError.networkError("Wisdom Circle backend is not configured")
+        }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        return request
+    }
+
+    func fetchPosts(limit: Int = 20) async throws -> [WisdomPost] {
+        guard !AppRuntimeConfig.localOnlyMode else {
+            return wisdomCircleMockPosts()
+        }
+
+        guard let baseURL = AppBackendConfig.wisdomPostsURL else {
+            return wisdomCircleMockPosts()
+        }
+
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return wisdomCircleMockPosts()
+        }
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        guard let url = components.url else {
+            return wisdomCircleMockPosts()
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            return wisdomCircleMockPosts()
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let rows = try? decoder.decode([WisdomPostResponse].self, from: data) {
+            return rows.compactMap { row in
+                guard let uuid = UUID(uuidString: row.id) else { return nil }
+                return WisdomPost(
+                    id: uuid,
+                    anonymousHandle: row.anonymousHandle,
+                    content: row.content,
+                    redactedContent: row.redactedContent,
+                    upvotes: row.upvotes,
+                    replies: row.replies,
+                    createdAt: row.createdAt,
+                    category: row.category
+                )
+            }
+        }
+
+        return wisdomCircleMockPosts()
+    }
+
+    func createPost(content: String, category: WisdomPostCategory) async throws -> WisdomPost {
+        let redacted = content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !AppRuntimeConfig.localOnlyMode else {
+            return WisdomPost(
+                id: UUID(),
+                anonymousHandle: Self.generateHandle(),
+                content: content,
+                redactedContent: redacted,
+                upvotes: 0,
+                replies: 0,
+                createdAt: Date(),
+                category: category
+            )
+        }
+
+        let request = try await request(path: "", method: "POST", body: [
+            "anonymous_handle": Self.generateHandle(),
+            "content": content,
+            "redacted_content": redacted,
+            "category": category.rawValue,
+        ])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw AppError.networkError("Failed to create wisdom post")
+        }
+
+          let decoder = JSONDecoder()
+          decoder.dateDecodingStrategy = .iso8601
+          if let row = try? decoder.decode(WisdomPostResponse.self, from: data),
+              let uuid = UUID(uuidString: row.id) {
+            return WisdomPost(
+                id: uuid,
+                anonymousHandle: row.anonymousHandle,
+                content: row.content,
+                redactedContent: row.redactedContent,
+                upvotes: row.upvotes,
+                replies: row.replies,
+                createdAt: row.createdAt,
+                category: row.category
+            )
+        }
+
+        return WisdomPost(
+            id: UUID(),
+            anonymousHandle: Self.generateHandle(),
+            content: content,
+            redactedContent: redacted,
+            upvotes: 0,
+            replies: 0,
+            createdAt: Date(),
+            category: category
+        )
+    }
+
+    func upvotePost(id: UUID) async throws {
+        guard !AppRuntimeConfig.localOnlyMode else { return }
+
+        guard let baseURL = AppBackendConfig.wisdomPostsURL else {
+            return
+        }
+
+        var url = baseURL
+        url.appendPathComponent(id.uuidString)
+        url.appendPathComponent("upvote")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw AppError.networkError("Failed to upvote wisdom post")
+        }
+    }
+
+    private static func generateHandle() -> String {
+        let adjectives = ["Wise", "Calm", "Brave", "Kind", "Steady"]
+        let nouns = ["Sage", "Seeker", "Guide", "Listener", "Compass"]
+        return "\(adjectives.randomElement() ?? "Wise")\(nouns.randomElement() ?? "Sage")\(Int.random(in: 10...99))"
     }
 }
 

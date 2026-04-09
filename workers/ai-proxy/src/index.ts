@@ -48,6 +48,20 @@ interface Env {
   RATE_LIMIT_STORE: KVNamespace;
   CACHE_STORE?: KVNamespace;
   ENCRYPTION_KEY?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_SECRET_KEY?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
+}
+
+interface WisdomPostRecord {
+  id: string;
+  anonymous_handle: string;
+  content: string;
+  redacted_content: string;
+  upvotes: number;
+  replies: number;
+  created_at: string;
+  category: string;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -335,6 +349,155 @@ function toneLabelForTier(tier: ModelTier): string {
   }
 }
 
+function getSupabaseSecretKey(env: Env): string {
+  return env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '';
+}
+
+function getSupabaseURL(env: Env): string {
+  return env.SUPABASE_URL || 'https://aqhcxeqpsydjiheyflik.supabase.co';
+}
+
+function buildWisdomFallbackPosts(): WisdomPostRecord[] {
+  return [
+    {
+      id: crypto.randomUUID(),
+      anonymous_handle: 'Seeker7',
+      content: 'How do you handle disagreements when emotions are high?',
+      redacted_content: 'How do you handle disagreements when emotions are high?',
+      upvotes: 24,
+      replies: 8,
+      created_at: new Date(Date.now() - 3600_000).toISOString(),
+      category: 'question',
+    },
+    {
+      id: crypto.randomUUID(),
+      anonymous_handle: 'Listener42',
+      content: 'Learning to listen without planning my response has changed everything.',
+      redacted_content: 'Learning to listen without planning my response has changed everything.',
+      upvotes: 156,
+      replies: 23,
+      created_at: new Date(Date.now() - 7200_000).toISOString(),
+      category: 'advice',
+    },
+  ];
+}
+
+async function supabaseAdminRequest(
+  env: Env,
+  path: string,
+  method: string,
+  body?: unknown
+): Promise<Response> {
+  const secretKey = getSupabaseSecretKey(env);
+  if (!secretKey) {
+    throw new Error('Supabase secret key is not configured');
+  }
+
+  const url = new URL(path, `${getSupabaseURL(env)}/`);
+  const request: RequestInit = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: secretKey,
+      Authorization: `Bearer ${secretKey}`,
+      Prefer: 'return=representation',
+    },
+  };
+
+  if (body !== undefined) {
+    request.body = JSON.stringify(body);
+  }
+
+  return fetch(url.toString(), request);
+}
+
+async function fetchWisdomPosts(env: Env, limit = 20, offset = 0): Promise<WisdomPostRecord[]> {
+  const secretKey = getSupabaseSecretKey(env);
+  if (!secretKey) {
+    return buildWisdomFallbackPosts();
+  }
+
+  const url = new URL(`${getSupabaseURL(env)}/rest/v1/wisdom_posts`);
+  url.searchParams.set('select', '*');
+  url.searchParams.set('order', 'upvotes.desc,created_at.desc');
+  url.searchParams.set('limit', String(limit));
+  url.searchParams.set('offset', String(offset));
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      apikey: secretKey,
+      Authorization: `Bearer ${secretKey}`,
+    },
+  });
+
+  if (!response.ok) {
+    return buildWisdomFallbackPosts();
+  }
+
+  return (await response.json()) as WisdomPostRecord[];
+}
+
+async function createWisdomPost(env: Env, payload: {
+  anonymous_handle: string;
+  content: string;
+  redacted_content: string;
+  category: string;
+}): Promise<WisdomPostRecord> {
+  const response = await supabaseAdminRequest(env, 'rest/v1/wisdom_posts', 'POST', payload);
+  if (!response.ok) {
+    throw new Error(`Failed to create wisdom post: ${response.status}`);
+  }
+
+  const rows = (await response.json()) as WisdomPostRecord[];
+  if (!rows[0]) {
+    throw new Error('Wisdom post insert returned no rows');
+  }
+
+  return rows[0];
+}
+
+async function upvoteWisdomPost(env: Env, postId: string): Promise<void> {
+  const secretKey = getSupabaseSecretKey(env);
+  if (!secretKey) {
+    throw new Error('Supabase secret key is not configured');
+  }
+
+  const baseUrl = getSupabaseURL(env);
+  const fetchUrl = new URL(`${baseUrl}/rest/v1/wisdom_posts`);
+  fetchUrl.searchParams.set('select', 'id,upvotes');
+  fetchUrl.searchParams.set('id', `eq.${postId}`);
+  fetchUrl.searchParams.set('limit', '1');
+
+  const fetchResponse = await fetch(fetchUrl.toString(), {
+    headers: {
+      apikey: secretKey,
+      Authorization: `Bearer ${secretKey}`,
+    },
+  });
+
+  if (!fetchResponse.ok) {
+    throw new Error(`Failed to load wisdom post: ${fetchResponse.status}`);
+  }
+
+  const rows = (await fetchResponse.json()) as Array<{ id: string; upvotes: number }>;
+  const currentUpvotes = rows[0]?.upvotes ?? 0;
+
+  const updateResponse = await fetch(`${baseUrl}/rest/v1/wisdom_posts?id=eq.${postId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: secretKey,
+      Authorization: `Bearer ${secretKey}`,
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({ upvotes: currentUpvotes + 1 }),
+  });
+
+  if (!updateResponse.ok) {
+    throw new Error(`Failed to upvote wisdom post: ${updateResponse.status}`);
+  }
+}
+
 async function callGemini(
   env: Env,
   tier: ModelTier,
@@ -489,6 +652,41 @@ export default {
           return encryptedJSONResponse(response, request, env, 200);
         }
         return jsonResponse(response, 200);
+      }
+
+      if (request.method === 'GET' && (url.pathname === '/api/v1/wisdom/posts' || url.pathname === '/wisdom/posts')) {
+        const limit = Number(url.searchParams.get('limit') || '20');
+        const offset = Number(url.searchParams.get('offset') || '0');
+        const posts = await fetchWisdomPosts(env, limit, offset);
+        return jsonResponse(posts, 200);
+      }
+
+      if (request.method === 'POST' && (url.pathname === '/api/v1/wisdom/posts' || url.pathname === '/wisdom/posts')) {
+        const body = (await request.json()) as {
+          anonymous_handle?: string;
+          content?: string;
+          category?: string;
+        };
+
+        const content = recapRedact(body.content || '').trim();
+        if (!content) {
+          return jsonResponse({ error: 'Content is required' }, 400);
+        }
+
+        const post = await createWisdomPost(env, {
+          anonymous_handle: body.anonymous_handle || `Seeker${Math.floor(Math.random() * 90) + 10}`,
+          content: body.content || '',
+          redacted_content: content,
+          category: body.category || 'advice',
+        });
+
+        return jsonResponse(post, 201);
+      }
+
+      const upvoteMatch = url.pathname.match(/^\/(?:api\/v1\/)?wisdom\/posts\/([^/]+)\/upvote$/);
+      if (request.method === 'POST' && upvoteMatch) {
+        await upvoteWisdomPost(env, upvoteMatch[1]);
+        return jsonResponse({ ok: true }, 200);
       }
 
       if (request.method === 'GET' && url.pathname === '/health') {

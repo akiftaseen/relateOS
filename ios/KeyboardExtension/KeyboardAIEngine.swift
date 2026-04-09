@@ -287,9 +287,15 @@ struct HealthTrendSample: Codable {
 final class MessageCaptureManager {
 
     private let sharedDefaults = UserDefaults(suiteName: "group.com.relateos.keyboard")
-    private let maxStoredMessages = 20
+    private let maxStoredMessages = 80
     private let healthSamplesKey = "health_delta_samples"
     private let maxStoredHealthSamples = 500
+    private let dedupWindowSeconds: TimeInterval = 30 * 60
+
+    private struct ParsedContextLine {
+        let text: String
+        let forcedOutgoing: Bool?
+    }
 
     // MARK: - Read
 
@@ -309,6 +315,166 @@ final class MessageCaptureManager {
         if let data = try? encoder.encode(capped) {
             sharedDefaults?.set(data, forKey: "message_history")
         }
+    }
+
+    // MARK: - Live Capture (keyboard-driven)
+
+    func appendOutgoingDraft(_ text: String, at timestamp: Date = Date()) {
+        let cleaned = normalizeLine(text)
+        guard cleaned.count >= 2 else { return }
+
+        var history = readMessageHistory()
+        history.append(
+            Message(
+                id: "out_\(Int(timestamp.timeIntervalSince1970 * 1000))",
+                text: cleaned,
+                isOutgoing: true,
+                timestamp: timestamp,
+                detectedLanguage: Locale.current.identifier
+            )
+        )
+        writeMessageHistory(deduplicated(history))
+    }
+
+    func mergeVisibleContext(
+        before: String,
+        selected: String,
+        after: String,
+        currentDraft: String,
+        at timestamp: Date = Date()
+    ) {
+        let candidates = extractContextLines(before: before, selected: selected, after: after)
+        guard !candidates.isEmpty else { return }
+
+        var history = readMessageHistory()
+        let inferredLanguage = Locale.current.identifier
+        let cleanedDraft = normalizeLine(currentDraft)
+
+        for line in candidates {
+            let outgoing = inferOutgoing(parsedLine: line, cleanedDraft: cleanedDraft)
+            history.append(
+                Message(
+                    id: "ctx_\(Int(timestamp.timeIntervalSince1970 * 1000))_\(line.text.hashValue)",
+                    text: line.text,
+                    isOutgoing: outgoing,
+                    timestamp: timestamp,
+                    detectedLanguage: inferredLanguage
+                )
+            )
+        }
+
+        writeMessageHistory(deduplicated(history))
+    }
+
+    private func extractContextLines(before: String, selected: String, after: String) -> [ParsedContextLine] {
+        let raw = [before, selected, after]
+            .joined(separator: "\n")
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map(String.init)
+
+        return raw
+            .compactMap(parseContextLine)
+            .suffix(8)
+            .map { $0 }
+    }
+
+    private func parseContextLine(_ value: String) -> ParsedContextLine? {
+        var line = normalizeLine(value)
+        guard line.count >= 2 else { return nil }
+
+        // Remove leading timestamp blocks like [10:34], 10:34 PM -, 22:01:
+        line = line.replacingOccurrences(
+            of: "^(\\[?\\d{1,2}:\\d{2}(?:\\s?[AaPp][Mm])?\\]?\\s*[-:]?\\s*)+",
+            with: "",
+            options: .regularExpression
+        )
+        line = normalizeLine(line)
+        guard line.count >= 2 else { return nil }
+        guard line.count <= 260 else { return nil }
+
+        let lower = line.lowercased()
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
+            return nil
+        }
+        if isLikelySystemNoise(lower) {
+            return nil
+        }
+
+        if let stripped = stripAnyPrefix(from: line, prefixes: ["You:", "You：", "Me:", "Me：", "我:", "我："]) {
+            return ParsedContextLine(text: stripped, forcedOutgoing: true)
+        }
+
+        if let stripped = stripAnyPrefix(from: line, prefixes: ["Other:", "Other：", "Them:", "Them：", "對方:", "對方："]) {
+            return ParsedContextLine(text: stripped, forcedOutgoing: false)
+        }
+
+        return ParsedContextLine(text: line, forcedOutgoing: nil)
+    }
+
+    private func inferOutgoing(parsedLine: ParsedContextLine, cleanedDraft: String) -> Bool {
+        if let forced = parsedLine.forcedOutgoing {
+            return forced
+        }
+
+        guard !cleanedDraft.isEmpty else { return false }
+        if parsedLine.text == cleanedDraft {
+            return true
+        }
+        if cleanedDraft.count >= 8 && parsedLine.text.count >= 8 {
+            if cleanedDraft.contains(parsedLine.text) || parsedLine.text.contains(cleanedDraft) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func stripAnyPrefix(from value: String, prefixes: [String]) -> String? {
+        for prefix in prefixes {
+            if value.hasPrefix(prefix) {
+                let stripped = normalizeLine(String(value.dropFirst(prefix.count)))
+                return stripped.count >= 2 ? stripped : nil
+            }
+        }
+        return nil
+    }
+
+    private func isLikelySystemNoise(_ lower: String) -> Bool {
+        let exactNoise: Set<String> = [
+            "online", "typing", "seen", "delivered", "read", "sent",
+            "today", "yesterday", "just now", "new message",
+            "type a message", "message", "attach", "camera", "photo"
+        ]
+        if exactNoise.contains(lower) {
+            return true
+        }
+
+        if lower.range(of: "^\\d{1,2}:\\d{2}(?:\\s?[ap]m)?$", options: .regularExpression) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private func deduplicated(_ messages: [Message]) -> [Message] {
+        var seen = Set<String>()
+        var output: [Message] = []
+
+        for message in messages.reversed() {
+            let bucket = Int(message.timestamp.timeIntervalSince1970 / dedupWindowSeconds)
+            let key = "\(message.isOutgoing ? "o" : "i")|\(normalizeLine(message.text).lowercased())|\(bucket)"
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            output.append(message)
+        }
+
+        return Array(output.reversed().suffix(maxStoredMessages))
+    }
+
+    private func normalizeLine(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Logging

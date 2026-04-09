@@ -4,12 +4,13 @@ compatibility_date = "2024-04-08"
 
 [env.production]
 route = "https://relateos-ai-proxy.relateos.workers.dev/*"
-vars = { ENVIRONMENT = "production" }
+vars = { ENVIRONMENT = "production", SUPABASE_URL = "https://aqhcxeqpsydjiheyflik.supabase.co" }
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_STORE"
 id = "YOUR_KV_NAMESPACE_ID"
 preview_id = "YOUR_PREVIEW_KV_NAMESPACE_ID"
 
-[secrets]
-GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
+# Set these with `wrangler secret put` so they stay server-side:
+# - GEMINI_API_KEY
+# - SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY

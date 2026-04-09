@@ -53,6 +53,10 @@
 	<string>https://aqhcxeqpsydjiheyflik.supabase.co</string>
 	<key>SUPABASE_PUBLISHABLE_KEY</key>
 	<string>sb_publishable_oqZWBOq9JoOmgHrbMzxPLQ_YmbR6mui</string>
+	<key>RELATEOS_WORKER_URL</key>
+	<string>https://relateos-ai-proxy.relateos.workers.dev</string>
+	<key>RELATEOS_LOCAL_TEST_MODE</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -128,6 +128,43 @@ Keyboard extension and container app must share limited state securely.
 
 Never store sensitive auth/session material in plain App Group storage.
 
+### 2.4 Practical Text Access Limits in iOS Apps
+
+The keyboard extension cannot read arbitrary on-screen chat content from other iOS apps.
+
+What is available:
+
+- `textDocumentProxy.documentContextBeforeInput`
+- `textDocumentProxy.documentContextAfterInput`
+- `textDocumentProxy.selectedText`
+
+Important constraints:
+
+- Context length is host-app dependent and often truncated.
+- Many apps expose only nearby cursor context, not full chat history.
+- No direct screenshot/DOM-like access to other apps' visible UI text.
+- Full Access enables networking, not unrestricted host-app content access.
+
+Product implication:
+
+- Real-time coaching should be treated as context-aware around the active input field.
+- For robust analysis, support a user-triggered `Analyze` action using current input context.
+- Optionally allow users to paste/send larger conversation snippets from the host app for deeper analysis.
+
+### 2.5 Offline-First Validation Mode (Pre-Cloud Integration)
+
+To validate core UX before full cloud rollout:
+
+- Container app local mode: auth/onboarding/community use on-device fallback data.
+- Keyboard analysis mode: `manual` (user taps `Analyze`) or `automatic` (debounced background analysis).
+- AI network path can remain enabled while non-AI cloud dependencies are disabled.
+
+Suggested test sequence:
+
+1. Run app with local mode enabled and verify auth/onboarding/dashboard/community end-to-end.
+2. Use keyboard in manual mode to verify push-button AI analysis latency and suggestion quality.
+3. Switch keyboard to automatic mode only after manual mode stability is acceptable.
+
 ---
 
 ## 3. iOS 26 Liquid Glass Design System Integration

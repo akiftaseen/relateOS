@@ -58,6 +58,9 @@
     <key>CFBundleVersion</key>
     <string>1</string>
 
+    <key>RELATEOS_ANALYSIS_MODE</key>
+    <string>manual</string>
+
     <!-- Memory limit: extension target must stay under 40 MB -->
     <!-- Set in Xcode: MARKETING_VERSION, memory limit enforced at build time -->
 

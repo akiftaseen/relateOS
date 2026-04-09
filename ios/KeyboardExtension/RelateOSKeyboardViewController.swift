@@ -5,6 +5,22 @@
 import UIKit
 import Combine
 
+private enum KeyboardAnalysisMode: String {
+    case automatic
+    case manual
+}
+
+private enum KeyboardRuntimeConfig {
+    static var analysisMode: KeyboardAnalysisMode {
+        let raw = (Bundle.main.object(forInfoDictionaryKey: "RELATEOS_ANALYSIS_MODE") as? String ?? "manual").lowercased()
+        return KeyboardAnalysisMode(rawValue: raw) ?? .manual
+    }
+
+    static var isManualAnalysis: Bool {
+        analysisMode == .manual
+    }
+}
+
 // MARK: - Main Keyboard View Controller
 
 @available(iOSApplicationExtension 18.0, *)
@@ -21,7 +37,9 @@ final class RelateOSKeyboardViewController: UIInputViewController {
     private let healthScoreProcessor = HealthScoreProcessor()
     private let captureManager = MessageCaptureManager()
     private var cancellables = Set<AnyCancellable>()
+    private var lastContextSignature = ""
 
+    private var customHeightConstraint: NSLayoutConstraint?
     private var currentDraft: String = ""
     private var analysisTask: Task<Void, Never>?
     private let startupSuggestions: [SuggestionModel] = [
@@ -80,13 +98,14 @@ final class RelateOSKeyboardViewController: UIInputViewController {
         suggestionBar = SuggestionBarView()
         suggestionBar.translatesAutoresizingMaskIntoConstraints = false
         suggestionBar.delegate = self
+        suggestionBar.setManualAnalyzeEnabled(KeyboardRuntimeConfig.isManualAnalysis)
         view.addSubview(suggestionBar)
 
         NSLayoutConstraint.activate([
             suggestionBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             suggestionBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             suggestionBar.topAnchor.constraint(equalTo: view.topAnchor),
-            suggestionBar.heightAnchor.constraint(equalToConstant: 64)
+            suggestionBar.heightAnchor.constraint(equalToConstant: 96)
         ])
     }
 
@@ -126,7 +145,9 @@ final class RelateOSKeyboardViewController: UIInputViewController {
     private func showStartupState() {
         suggestionBar.updateSuggestions(startupSuggestions)
         subtextTooltip.configure(
-            explanation: "先用建議回覆，系統會再按對話內容調整語氣。",
+            explanation: KeyboardRuntimeConfig.isManualAnalysis
+                ? "按 Analyze 後提供即時回覆建議。"
+                : "先用建議回覆，系統會再按對話內容調整語氣。",
             emotion: "中性",
             healthDelta: nil
         )
@@ -135,6 +156,15 @@ final class RelateOSKeyboardViewController: UIInputViewController {
 
     private func updateLayout() {
         let isLandscape = view.bounds.width > view.bounds.height
+        
+        if customHeightConstraint == nil {
+            let constraint = view.heightAnchor.constraint(equalToConstant: 310)
+            constraint.priority = .init(999)
+            constraint.isActive = true
+            customHeightConstraint = constraint
+        }
+        
+        customHeightConstraint?.constant = isLandscape ? 252 : 324
         keyboardView.updateForOrientation(isLandscape: isLandscape)
     }
 
@@ -148,32 +178,71 @@ final class RelateOSKeyboardViewController: UIInputViewController {
         let afterText = proxy.documentContextAfterInput ?? ""
         let selectedText = proxy.selectedText ?? ""
 
-        currentDraft = beforeText
+        currentDraft = selectedText.isEmpty ? beforeText : selectedText
+
+        let signature = [beforeText, selectedText, afterText].joined(separator: "|")
+        if signature != lastContextSignature {
+            captureManager.mergeVisibleContext(
+                before: beforeText,
+                selected: selectedText,
+                after: afterText,
+                currentDraft: currentDraft
+            )
+            lastContextSignature = signature
+        }
 
         // Read shared message history from AppGroup
         let messageHistory = captureManager.readMessageHistory()
 
-        // Trigger AI analysis with debounce
-        scheduleAnalysis(
-            draft: currentDraft,
-            context: messageHistory,
-            surrounding: (before: beforeText, after: afterText, selected: selectedText)
-        )
+        if !KeyboardRuntimeConfig.isManualAnalysis {
+            // Trigger AI analysis with debounce in automatic mode.
+            scheduleAnalysis(
+                draft: currentDraft,
+                context: messageHistory,
+                surrounding: (before: beforeText, after: afterText, selected: selectedText),
+                debounceNanoseconds: 300_000_000
+            )
+        }
     }
 
     private func scheduleAnalysis(
         draft: String,
         context: [Message],
-        surrounding: (before: String, after: String, selected: String)
+        surrounding: (before: String, after: String, selected: String),
+        debounceNanoseconds: UInt64
     ) {
         analysisTask?.cancel()
         analysisTask = Task { [weak self] in
-            // 300ms debounce
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            if debounceNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: debounceNanoseconds)
+            }
             guard !Task.isCancelled else { return }
 
             await self?.runAnalysis(draft: draft, context: context)
         }
+    }
+
+    private func triggerManualAnalysis() {
+        let proxy = textDocumentProxy
+        let beforeText = proxy.documentContextBeforeInput ?? ""
+        let afterText = proxy.documentContextAfterInput ?? ""
+        let selectedText = proxy.selectedText ?? ""
+        let messageHistory = captureManager.readMessageHistory()
+        let draft = selectedText.isEmpty ? beforeText : selectedText
+
+        captureManager.mergeVisibleContext(
+            before: beforeText,
+            selected: selectedText,
+            after: afterText,
+            currentDraft: draft
+        )
+
+        scheduleAnalysis(
+            draft: draft,
+            context: messageHistory,
+            surrounding: (before: beforeText, after: afterText, selected: selectedText),
+            debounceNanoseconds: 0
+        )
     }
 
     private func runAnalysis(draft: String, context: [Message]) async {
@@ -304,6 +373,8 @@ extension RelateOSKeyboardViewController: KeyboardViewDelegate {
             HapticEngine.shared.deleteBackward()
 
         case .return:
+            let outbound = textDocumentProxy.documentContextBeforeInput ?? currentDraft
+            captureManager.appendOutgoingDraft(outbound)
             proxy.insertText("\n")
             HapticEngine.shared.keyTap()
 
@@ -358,6 +429,10 @@ extension RelateOSKeyboardViewController: SuggestionBarDelegate {
 
     func suggestionBarDidTapSubtextIndicator(_ bar: SuggestionBarView) {
         toggleSubtextTooltip()
+    }
+
+    func suggestionBarDidTapAnalyze(_ bar: SuggestionBarView) {
+        triggerManualAnalysis()
     }
 
     private func toggleSubtextTooltip() {
