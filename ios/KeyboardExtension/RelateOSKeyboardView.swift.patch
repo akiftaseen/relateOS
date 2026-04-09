@@ -1,0 +1,78 @@
+--- ios/KeyboardExtension/RelateOSKeyboardView.swift
++++ ios/KeyboardExtension/RelateOSKeyboardView.swift
+@@ -138,8 +138,8 @@
+     private var shiftTapCount = 0
+     private var lastShiftTapTime: Date?
+ 
+-      let keySpacing: CGFloat = 7
+-      let rowSpacing: CGFloat = 10
++      let keySpacing: CGFloat = 5
++      let rowSpacing: CGFloat = 8
+     let cornerRadius: CGFloat = 7.5
+ 
+@@ -330,9 +330,9 @@
+                 .frame(maxHeight: .infinity)
+             }
+         }
+-        .padding(.horizontal, 4)
++        .padding(.horizontal, 6)
+         .padding(.top, 4)
+         .padding(.bottom, 8)
+         .frame(maxHeight: .infinity)
+     }
+@@ -348,11 +348,11 @@
+     var body: some View {
+         Button(action: onTap) {
+             Text(key.displayLabel)
+                 .font(keyFont)
+-                .foregroundStyle(Color(uiColor: .label))
++                .foregroundStyle(key.isPrimaryAction ? Color.white : Color(uiColor: .label))
+                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+-                .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+         }
+-        .keyboardGlassButtonStyle(isPrimary: key.isPrimaryAction)
++        .buttonStyle(KeyboardKeyButtonStyle(isPrimary: key.isPrimaryAction, isSpecial: key.isSpecial, cornerRadius: cornerRadius))
+         .accessibilityLabel(accessibilityLabel)
+         .frame(maxWidth: key.isWide ? .infinity : nil)
+         .frame(width: key.width)
+@@ -367,20 +367,21 @@
+ }
+ 
+ @available(iOSApplicationExtension 18.0, *)
+-private extension View {
+-    @ViewBuilder
+-    func keyboardGlassButtonStyle(isPrimary: Bool) -> some View {
+-        if #available(iOSApplicationExtension 26.0, *) {
+-            if isPrimary {
+-                self.buttonStyle(.glassProminent)
+-            } else {
+-                self.buttonStyle(.glass)
+-            }
+-        } else {
+-            if isPrimary {
+-                self.buttonStyle(.borderedProminent)
+-            } else {
+-                self.buttonStyle(.bordered)
+-            }
+-        }
+-    }
++struct KeyboardKeyButtonStyle: ButtonStyle {
++    let isPrimary: Bool
++    let isSpecial: Bool
++    let cornerRadius: CGFloat
++
++    func makeBody(configuration: Configuration) -> some View {
++        configuration.label
++            .background(
++                Group {
++                    if isPrimary { Color.blue }
++                    else if isSpecial { Color(uiColor: .systemGray4) }
++                    else { Color(uiColor: .systemBackground) }
++                }
++            )
++            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
++            .shadow(color: Color.black.opacity(0.3), radius: 0, x: 0, y: 1)
++            .scaleEffect(configuration.isPressed ? 1.15 : 1.0)
++            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
++    }
+ }

@@ -1,7 +1,8 @@
 // SuggestionBarView.swift
-// RelateOS — AI Suggestion Bar with Liquid Glass Bubbles
+// RelateOS — SwiftUI-hosted AI Suggestion Bar with system glass styles
 
 import UIKit
+import SwiftUI
 
 // MARK: - Models
 
@@ -62,24 +63,15 @@ protocol SuggestionBarDelegate: AnyObject {
     func suggestionBarDidTapSubtextIndicator(_ bar: SuggestionBarView)
 }
 
-// MARK: - Suggestion Bar
+// MARK: - Suggestion Bar (UIKit host)
 
 @available(iOSApplicationExtension 18.0, *)
 final class SuggestionBarView: UIView {
 
     weak var delegate: SuggestionBarDelegate?
 
-    // MARK: - UI Components
-
-    private var scrollView: UIScrollView!
-    private var contentStack: UIStackView!
-    private var subtextButton: SubtextIndicatorButton!
-    private var thinkingLabel: UILabel!
-
-    private var suggestionBubbles: [SuggestionBubble] = []
-    private var currentSuggestions: [SuggestionModel] = []
-
-    // MARK: - Init
+    private let state = SuggestionBarState()
+    private var hostingController: UIHostingController<SuggestionBarRootView>?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -87,405 +79,193 @@ final class SuggestionBarView: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    // MARK: - Setup
 
     private func setup() {
         backgroundColor = .clear
 
-        // Top separator line (ultra thin)
-        let separator = UIView()
-        separator.backgroundColor = UIColor.separator.withAlphaComponent(0.4)
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(separator)
+        let root = SuggestionBarRootView(
+            state: state,
+            onSuggestionTap: { [weak self] suggestion in
+                guard let self else { return }
+                delegate?.suggestionBar(self, didSelectSuggestion: suggestion)
+            },
+            onSubtextTap: { [weak self] in
+                guard let self else { return }
+                delegate?.suggestionBarDidTapSubtextIndicator(self)
+            }
+        )
+
+        let host = UIHostingController(rootView: root)
+        host.view.backgroundColor = .clear
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        hostingController = host
+
+        addSubview(host.view)
         NSLayoutConstraint.activate([
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.topAnchor.constraint(equalTo: topAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 0.33)
-        ])
-
-        // Glass background
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(blur)
-        NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            blur.topAnchor.constraint(equalTo: topAnchor),
-            blur.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-
-        // Scroll view for suggestions
-        scrollView = UIScrollView()
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.showsVerticalScrollIndicator = false
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.contentInset = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 52)
-        blur.contentView.addSubview(scrollView)
-
-        contentStack = UIStackView()
-        contentStack.axis = .horizontal
-        contentStack.spacing = 8
-        contentStack.alignment = .center
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.addSubview(contentStack)
-
-        NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor, constant: -44),
-            scrollView.topAnchor.constraint(equalTo: blur.contentView.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor),
-
-            contentStack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-            contentStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            contentStack.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
-        ])
-
-        // Subtext indicator button (right side)
-        subtextButton = SubtextIndicatorButton()
-        subtextButton.translatesAutoresizingMaskIntoConstraints = false
-        subtextButton.alpha = 0
-        subtextButton.addTarget(self, action: #selector(subtextTapped), for: .touchUpInside)
-        blur.contentView.addSubview(subtextButton)
-
-        NSLayoutConstraint.activate([
-            subtextButton.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor, constant: -8),
-            subtextButton.centerYAnchor.constraint(equalTo: blur.contentView.centerYAnchor),
-            subtextButton.widthAnchor.constraint(equalToConstant: 36),
-            subtextButton.heightAnchor.constraint(equalToConstant: 36)
-        ])
-
-        // Thinking label
-        thinkingLabel = UILabel()
-        thinkingLabel.text = "思考中…"
-        thinkingLabel.font = .systemFont(ofSize: 13, weight: .regular)
-        thinkingLabel.textColor = .secondaryLabel
-        thinkingLabel.translatesAutoresizingMaskIntoConstraints = false
-        thinkingLabel.alpha = 0
-        blur.contentView.addSubview(thinkingLabel)
-        NSLayoutConstraint.activate([
-            thinkingLabel.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor, constant: 16),
-            thinkingLabel.centerYAnchor.constraint(equalTo: blur.contentView.centerYAnchor)
+            host.view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
     }
 
-    // MARK: - Public Interface
-
     func updateSuggestions(_ suggestions: [SuggestionModel]) {
-        currentSuggestions = suggestions
-
-        // Animate out old bubbles
-        let oldBubbles = suggestionBubbles
-        UIView.animate(withDuration: 0.15, animations: {
-            oldBubbles.forEach {
-                $0.alpha = 0
-                $0.transform = CGAffineTransform(translationX: 0, y: 8)
-            }
-        }) { _ in
-            oldBubbles.forEach { $0.removeFromSuperview() }
-        }
-        suggestionBubbles.removeAll()
-
-        // Animate in new bubbles
-        thinkingLabel.alpha = 0
-
-        for (index, suggestion) in suggestions.prefix(3).enumerated() {
-            let bubble = SuggestionBubble(suggestion: suggestion)
-            bubble.alpha = 0
-            bubble.transform = CGAffineTransform(translationX: 0, y: 12)
-            bubble.addTarget(self, action: #selector(bubbleTapped(_:)), for: .touchUpInside)
-            contentStack.addArrangedSubview(bubble)
-            suggestionBubbles.append(bubble)
-
-            UIView.animate(
-                withDuration: 0.3,
-                delay: Double(index) * 0.06,
-                usingSpringWithDamping: 0.75,
-                initialSpringVelocity: 0.5
-            ) {
-                bubble.alpha = 1
-                bubble.transform = .identity
-            }
-        }
-
-        // Scroll back to start
-        scrollView.setContentOffset(CGPoint(x: -12, y: 0), animated: true)
+        state.updateSuggestions(suggestions)
     }
 
     func showThinkingFallback() {
-        UIView.animate(withDuration: 0.2) {
-            self.thinkingLabel.alpha = 1
-            self.suggestionBubbles.forEach { $0.alpha = 0.3 }
+        state.showThinkingFallback()
+    }
+
+    func showSubtextIndicator() {
+        state.showSubtextIndicator()
+    }
+}
+
+// MARK: - SwiftUI State
+
+@available(iOSApplicationExtension 18.0, *)
+private final class SuggestionBarState: ObservableObject {
+    @Published var suggestions: [SuggestionModel] = []
+    @Published var isThinking = false
+    @Published var showSubtextButton = false
+
+    func updateSuggestions(_ newSuggestions: [SuggestionModel]) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+            suggestions = Array(newSuggestions.prefix(3))
+            isThinking = false
+        }
+    }
+
+    func showThinkingFallback() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isThinking = true
         }
     }
 
     func showSubtextIndicator() {
-        UIView.animate(
-            withDuration: 0.4,
-            delay: 0.3,
-            usingSpringWithDamping: 0.7,
-            initialSpringVelocity: 0
-        ) {
-            self.subtextButton.alpha = 1
-            self.subtextButton.transform = .identity
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.75).delay(0.25)) {
+            showSubtextButton = true
         }
-    }
-
-    // MARK: - Actions
-
-    @objc private func bubbleTapped(_ bubble: SuggestionBubble) {
-        bubble.animateSelection()
-        delegate?.suggestionBar(self, didSelectSuggestion: bubble.suggestion)
-    }
-
-    @objc private func subtextTapped() {
-        subtextButton.animatePulse()
-        delegate?.suggestionBarDidTapSubtextIndicator(self)
     }
 }
 
-// MARK: - Suggestion Bubble
+// MARK: - SwiftUI Views
 
 @available(iOSApplicationExtension 18.0, *)
-final class SuggestionBubble: UIControl {
+private struct SuggestionBarRootView: View {
+    @ObservedObject var state: SuggestionBarState
+    let onSuggestionTap: (SuggestionModel) -> Void
+    let onSubtextTap: () -> Void
 
-    let suggestion: SuggestionModel
-
-    private let containerStack = UIStackView()
-    private let toneIconView = UIImageView()
-    private let textLabel = UILabel()
-    private let tonePillView = TonePillView()
-
-    private var glassBackground: UIVisualEffectView!
-
-    init(suggestion: SuggestionModel) {
-        self.suggestion = suggestion
-        super.init(frame: .zero)
-        configure()
+    var body: some View {
+        barBody
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color(uiColor: .separator).opacity(0.4))
+                    .frame(height: 0.33)
+            }
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    private var barBody: some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(state.suggestions, id: \.id) { suggestion in
+                        SuggestionBubbleView(suggestion: suggestion) {
+                            onSuggestionTap(suggestion)
+                        }
+                        .opacity(state.isThinking ? 0.35 : 1.0)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .padding(.leading, 12)
+                .padding(.trailing, 4)
+            }
 
-    private func configure() {
-        layer.cornerRadius = 20
-        layer.cornerCurve = .continuous
-        clipsToBounds = true
+            if state.isThinking {
+                Text("思考中…")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+            }
 
-        // Liquid glass bubble background
-        glassBackground = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
-        glassBackground.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(glassBackground)
-        NSLayoutConstraint.activate([
-            glassBackground.leadingAnchor.constraint(equalTo: leadingAnchor),
-            glassBackground.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glassBackground.topAnchor.constraint(equalTo: topAnchor),
-            glassBackground.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-
-        // Tone color accent overlay
-        let toneOverlay = UIView()
-        toneOverlay.backgroundColor = suggestion.tone.color.withAlphaComponent(0.15)
-        toneOverlay.translatesAutoresizingMaskIntoConstraints = false
-        glassBackground.contentView.addSubview(toneOverlay)
-        NSLayoutConstraint.activate([
-            toneOverlay.leadingAnchor.constraint(equalTo: glassBackground.contentView.leadingAnchor),
-            toneOverlay.trailingAnchor.constraint(equalTo: glassBackground.contentView.trailingAnchor),
-            toneOverlay.topAnchor.constraint(equalTo: glassBackground.contentView.topAnchor),
-            toneOverlay.bottomAnchor.constraint(equalTo: glassBackground.contentView.bottomAnchor)
-        ])
-
-        // Content
-        let contentStack = UIStackView()
-        contentStack.axis = .vertical
-        contentStack.spacing = 2
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        glassBackground.contentView.addSubview(contentStack)
-
-        // Tone pill (top)
-        tonePillView.configure(tone: suggestion.tone)
-        contentStack.addArrangedSubview(tonePillView)
-
-        // Suggestion text
-        textLabel.text = suggestion.text
-        textLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        textLabel.textColor = UIColor { traits in
-            traits.userInterfaceStyle == .dark ? .white : UIColor(white: 0.1, alpha: 1)
-        }
-        textLabel.numberOfLines = 2
-        textLabel.lineBreakMode = .byTruncatingTail
-        contentStack.addArrangedSubview(textLabel)
-
-        NSLayoutConstraint.activate([
-            contentStack.leadingAnchor.constraint(equalTo: glassBackground.contentView.leadingAnchor, constant: 12),
-            contentStack.trailingAnchor.constraint(equalTo: glassBackground.contentView.trailingAnchor, constant: -12),
-            contentStack.topAnchor.constraint(equalTo: glassBackground.contentView.topAnchor, constant: 7),
-            contentStack.bottomAnchor.constraint(equalTo: glassBackground.contentView.bottomAnchor, constant: -7)
-        ])
-
-        // Border accent
-        layer.borderColor = suggestion.tone.color.withAlphaComponent(0.4).cgColor
-        layer.borderWidth = 0.5
-
-        // Shadow
-        layer.shadowColor = suggestion.tone.color.cgColor
-        layer.shadowOpacity = 0.2
-        layer.shadowRadius = 6
-        layer.shadowOffset = .zero
-
-        // Max width constraint
-        widthAnchor.constraint(lessThanOrEqualToConstant: 180).isActive = true
-        widthAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
-    }
-
-    func animateSelection() {
-        UIView.animate(withDuration: 0.1, animations: {
-            self.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
-            self.alpha = 0.6
-        }) { _ in
-            UIView.animate(withDuration: 0.2, delay: 0,
-                           usingSpringWithDamping: 0.6, initialSpringVelocity: 0.8) {
-                self.transform = .identity
-                self.alpha = 1.0
+            if state.showSubtextButton {
+                Button(action: onSubtextTap) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color(uiColor: .label))
+                        .frame(width: 48, height: 48)
+                }
+                .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 24))
+                .accessibilityLabel("Subtext explanation")
+                .transition(.scale.combined(with: .opacity))
             }
         }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
+    }
+}
 
-        // Ripple flash in tone color
-        let flash = UIView(frame: bounds)
-        flash.backgroundColor = suggestion.tone.color.withAlphaComponent(0.3)
-        flash.layer.cornerRadius = layer.cornerRadius
-        flash.layer.cornerCurve = .continuous
-        addSubview(flash)
-        UIView.animate(withDuration: 0.35) {
-            flash.alpha = 0
-        } completion: { _ in
-            flash.removeFromSuperview()
+@available(iOSApplicationExtension 18.0, *)
+private struct SuggestionBubbleView: View {
+    let suggestion: SuggestionModel
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Image(systemName: suggestion.tone.icon)
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(suggestion.tone.label)
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(Color(uiColor: suggestion.tone.color))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Color(uiColor: suggestion.tone.color).opacity(0.16))
+                .clipShape(Capsule())
+
+                Text(suggestion.text)
+                    .font(.system(size: 15, weight: .medium))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .foregroundStyle(Color(uiColor: .label))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(minWidth: 120, maxHeight: .infinity, alignment: .leading)
         }
+        .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 12))
+        .accessibilityLabel(suggestion.text)
     }
 }
-
-// MARK: - Tone Pill View
 
 @available(iOSApplicationExtension 18.0, *)
-final class TonePillView: UIView {
+struct AssistantBubbleButtonStyle: ButtonStyle {
+    let cornerRadius: CGFloat
 
-    private let iconView = UIImageView()
-    private let label = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setup()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func setup() {
-        let stack = UIStackView(arrangedSubviews: [iconView, label])
-        stack.axis = .horizontal
-        stack.spacing = 3
-        stack.alignment = .center
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-
-        iconView.contentMode = .scaleAspectFit
-        iconView.widthAnchor.constraint(equalToConstant: 10).isActive = true
-        iconView.heightAnchor.constraint(equalToConstant: 10).isActive = true
-
-        label.font = .systemFont(ofSize: 10, weight: .semibold)
-
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-    }
-
-    func configure(tone: SuggestionTone) {
-        iconView.image = UIImage(systemName: tone.icon)?
-            .withRenderingMode(.alwaysTemplate)
-        iconView.tintColor = tone.color
-        label.text = tone.label
-        label.textColor = tone.color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color(uiColor: .systemBackground).opacity(0.95))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: Color.black.opacity(0.2), radius: 0, x: 0, y: 1.0)
+            .scaleEffect(configuration.isPressed ? 1.05 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.65), value: configuration.isPressed)
+            .zIndex(configuration.isPressed ? 100 : 0)
     }
 }
 
-// MARK: - Subtext Indicator Button
-
-@available(iOSApplicationExtension 18.0, *)
-final class SubtextIndicatorButton: UIButton {
-
-    private let rippleLayer = CAShapeLayer()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setup()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func setup() {
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
-        blur.layer.cornerRadius = 18
-        blur.layer.cornerCurve = .continuous
-        blur.clipsToBounds = true
-        blur.isUserInteractionEnabled = false
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(blur)
-        NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            blur.topAnchor.constraint(equalTo: topAnchor),
-            blur.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-
-        let icon = UIImageView(image: UIImage(systemName: "sparkles")?
-            .withRenderingMode(.alwaysTemplate))
-        icon.tintColor = UIColor(red: 0.45, green: 0.65, blue: 1.0, alpha: 1)
-        icon.contentMode = .scaleAspectFit
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.isUserInteractionEnabled = false
-        blur.contentView.addSubview(icon)
-        NSLayoutConstraint.activate([
-            icon.centerXAnchor.constraint(equalTo: blur.contentView.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: blur.contentView.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16),
-            icon.heightAnchor.constraint(equalToConstant: 16)
-        ])
-
-        layer.borderColor = UIColor(red: 0.45, green: 0.65, blue: 1.0, alpha: 0.4).cgColor
-        layer.borderWidth = 0.5
-        layer.cornerRadius = 18
-        layer.cornerCurve = .continuous
-
-        transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
-    }
-
-    func animatePulse() {
-        let pulse = CABasicAnimation(keyPath: "transform.scale")
-        pulse.fromValue = 1.0
-        pulse.toValue = 1.15
-        pulse.duration = 0.15
-        pulse.autoreverses = true
-        layer.add(pulse, forKey: "pulse")
-    }
-}
-
-// MARK: - Subtext Tooltip View
+// MARK: - Auxiliary UIKit Views
 
 @available(iOSApplicationExtension 18.0, *)
 final class SubtextTooltipView: UIView {
 
-    private let containerBlur: UIVisualEffectView
-    private let iconView = UIImageView()
-    private let emotionLabel = UILabel()
     private let explanationLabel = UILabel()
-    private let healthDeltaView = HealthDeltaBadge()
+    private let metadataLabel = UILabel()
 
     override init(frame: CGRect) {
-        containerBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
         super.init(frame: frame)
         setup()
     }
@@ -493,126 +273,57 @@ final class SubtextTooltipView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setup() {
-        containerBlur.layer.cornerRadius = 14
-        containerBlur.layer.cornerCurve = .continuous
-        containerBlur.clipsToBounds = true
-        containerBlur.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(containerBlur)
-        NSLayoutConstraint.activate([
-            containerBlur.leadingAnchor.constraint(equalTo: leadingAnchor),
-            containerBlur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            containerBlur.topAnchor.constraint(equalTo: topAnchor),
-            containerBlur.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
+        if #available(iOSApplicationExtension 26.0, *) {
+            backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.42)
+        } else {
+            backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.78)
+        }
 
-        // Header row
-        let headerStack = UIStackView(arrangedSubviews: [iconView, emotionLabel, UIView(), healthDeltaView])
-        headerStack.axis = .horizontal
-        headerStack.spacing = 6
-        headerStack.alignment = .center
-
-        iconView.contentMode = .scaleAspectFit
-        iconView.widthAnchor.constraint(equalToConstant: 16).isActive = true
-        iconView.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        iconView.tintColor = UIColor(red: 0.45, green: 0.65, blue: 1.0, alpha: 1)
-
-        emotionLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        emotionLabel.textColor = .secondaryLabel
-
-        // Explanation text
-        explanationLabel.font = .systemFont(ofSize: 13, weight: .regular)
-        explanationLabel.textColor = .label
-        explanationLabel.numberOfLines = 3
-        explanationLabel.lineBreakMode = .byWordWrapping
-
-        let mainStack = UIStackView(arrangedSubviews: [headerStack, explanationLabel])
-        mainStack.axis = .vertical
-        mainStack.spacing = 6
-        mainStack.translatesAutoresizingMaskIntoConstraints = false
-        containerBlur.contentView.addSubview(mainStack)
-
-        NSLayoutConstraint.activate([
-            mainStack.leadingAnchor.constraint(equalTo: containerBlur.contentView.leadingAnchor, constant: 14),
-            mainStack.trailingAnchor.constraint(equalTo: containerBlur.contentView.trailingAnchor, constant: -14),
-            mainStack.topAnchor.constraint(equalTo: containerBlur.contentView.topAnchor, constant: 10),
-            mainStack.bottomAnchor.constraint(equalTo: containerBlur.contentView.bottomAnchor, constant: -10)
-        ])
-
-        layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOpacity = 0.12
-        layer.shadowRadius = 12
-        layer.shadowOffset = CGSize(width: 0, height: 4)
-
-        layer.borderColor = UIColor.separator.withAlphaComponent(0.3).cgColor
+        layer.cornerRadius = 12
+        layer.cornerCurve = .continuous
         layer.borderWidth = 0.5
+        layer.borderColor = UIColor.separator.withAlphaComponent(0.35).cgColor
+
+        explanationLabel.numberOfLines = 0
+        explanationLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        explanationLabel.textColor = .label
+
+        metadataLabel.numberOfLines = 1
+        metadataLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        metadataLabel.textColor = .secondaryLabel
+
+        let stack = UIStackView(arrangedSubviews: [explanationLabel, metadataLabel])
+        stack.axis = .vertical
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10)
+        ])
     }
 
     func configure(explanation: String, emotion: String?, healthDelta: Float?) {
         explanationLabel.text = explanation
 
-        if let emotion = emotion {
-            emotionLabel.text = emotion
-            iconView.image = UIImage(systemName: "waveform.path.ecg")?
-                .withRenderingMode(.alwaysTemplate)
-        }
+        let emotionText = (emotion?.isEmpty == false) ? emotion! : "未知"
 
-        if let delta = healthDelta {
-            healthDeltaView.configure(delta: delta)
-            healthDeltaView.isHidden = false
+        if let healthDelta {
+            let sign = healthDelta >= 0 ? "+" : ""
+            metadataLabel.text = "情緒: \(emotionText)  關係分數: \(sign)\(String(format: "%.1f", healthDelta))"
         } else {
-            healthDeltaView.isHidden = true
+            metadataLabel.text = "情緒: \(emotionText)"
         }
     }
 }
-
-// MARK: - Health Delta Badge
-
-@available(iOSApplicationExtension 18.0, *)
-final class HealthDeltaBadge: UIView {
-
-    private let label = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setup()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func setup() {
-        layer.cornerRadius = 10
-        layer.cornerCurve = .continuous
-        clipsToBounds = true
-
-        label.font = .systemFont(ofSize: 11, weight: .bold)
-        label.textColor = .white
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3)
-        ])
-    }
-
-    func configure(delta: Float) {
-        let sign = delta >= 0 ? "+" : ""
-        label.text = "\(sign)\(Int(delta * 100))%"
-        backgroundColor = delta >= 0
-            ? UIColor(red: 0.2, green: 0.7, blue: 0.45, alpha: 1)
-            : UIColor(red: 0.85, green: 0.3, blue: 0.3, alpha: 1)
-    }
-}
-
-// MARK: - Thinking Indicator View
 
 @available(iOSApplicationExtension 18.0, *)
 final class ThinkingIndicatorView: UIView {
 
-    private let dotStack = UIStackView()
-    private var dots: [UIView] = []
-    private var dotAnimations: [Bool] = [false, false, false]
+    private let indicator = UIActivityIndicatorView(style: .medium)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -622,49 +333,23 @@ final class ThinkingIndicatorView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setup() {
-        dotStack.axis = .horizontal
-        dotStack.spacing = 4
-        dotStack.alignment = .center
-        dotStack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(dotStack)
-        NSLayoutConstraint.activate([
-            dotStack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            dotStack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            dotStack.topAnchor.constraint(equalTo: topAnchor),
-            dotStack.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        indicator.color = .secondaryLabel
+        addSubview(indicator)
 
-        for i in 0..<3 {
-            let dot = UIView()
-            dot.backgroundColor = UIColor(red: 0.45, green: 0.65, blue: 1.0, alpha: 0.8)
-            dot.layer.cornerRadius = 3
-            dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
-            dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
-            dotStack.addArrangedSubview(dot)
-            dots.append(dot)
-            _ = i
-        }
+        NSLayoutConstraint.activate([
+            indicator.leadingAnchor.constraint(equalTo: leadingAnchor),
+            indicator.trailingAnchor.constraint(equalTo: trailingAnchor),
+            indicator.topAnchor.constraint(equalTo: topAnchor),
+            indicator.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
     }
 
     func startAnimating() {
-        for (i, dot) in dots.enumerated() {
-            let delay = Double(i) * 0.18
-            UIView.animate(
-                withDuration: 0.5,
-                delay: delay,
-                options: [.repeat, .autoreverse, .curveEaseInOut]
-            ) {
-                dot.transform = CGAffineTransform(translationX: 0, y: -4)
-                dot.alpha = 1.0
-            }
-        }
+        indicator.startAnimating()
     }
 
     func stopAnimating() {
-        dots.forEach {
-            $0.layer.removeAllAnimations()
-            $0.transform = .identity
-            $0.alpha = 0.5
-        }
+        indicator.stopAnimating()
     }
 }

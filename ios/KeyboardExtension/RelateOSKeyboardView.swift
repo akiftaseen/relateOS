@@ -1,7 +1,8 @@
 // RelateOSKeyboardView.swift
-// iOS 26 Liquid Glass Key Layout — QWERTY + Cangjie/Jyutping toggle
+// SwiftUI-hosted keyboard surface using system glass/material styles
 
 import UIKit
+import SwiftUI
 
 // MARK: - Delegate Protocol
 
@@ -13,7 +14,7 @@ protocol KeyboardViewDelegate: AnyObject {
 
 // MARK: - Key Model
 
-struct KeyModel {
+struct KeyModel: Identifiable {
     enum KeyType {
         case character(String)
         case space
@@ -27,17 +28,30 @@ struct KeyModel {
         case emoji
     }
 
+    let id: String
     let type: KeyType
     var displayLabel: String
     var isWide: Bool = false
     var isSpecial: Bool = false
-    var width: CGFloat? = nil  // override for custom widths
+    var width: CGFloat? = nil
+
+    var isPrimaryAction: Bool {
+        if case .return = type {
+            return true
+        }
+        return false
+    }
 }
 
 // MARK: - Keyboard Mode
 
 enum KeyboardMode {
-    case alpha, alphaShifted, alphaCapsLock, numeric, symbols, emoji
+    case alpha
+    case alphaShifted
+    case alphaCapsLock
+    case numeric
+    case symbols
+    case emoji
 }
 
 // MARK: - Main Keyboard View
@@ -45,30 +59,11 @@ enum KeyboardMode {
 @available(iOSApplicationExtension 18.0, *)
 final class RelateOSKeyboardView: UIView {
 
-    // MARK: - Properties
-
     weak var delegate: KeyboardViewDelegate?
     unowned let hostInputViewController: UIInputViewController
 
-    private var currentMode: KeyboardMode = .alpha
-    private var isShiftHeld = false
-    private var shiftTapCount = 0
-    private var lastShiftTapTime: Date?
-
-    private var keyRows: [[KeyButton]] = []
-    private var stackView: UIStackView!
-    private var spaceBarView: SpaceBarView!
-
-    // iOS 26 — glass effect container
-    private var glassContainer: UIVisualEffectView!
-
-    // Layout constants
-    private let keySpacing: CGFloat = 6
-    private let rowSpacing: CGFloat = 8
-    private let keyHeight: CGFloat = 44
-    private let cornerRadius: CGFloat = 9
-
-    // MARK: - Init
+    private let state = KeyboardGlassState()
+    private var hostingController: UIHostingController<KeyboardGlassRootView>?
 
     init(inputViewController: UIInputViewController, delegate: KeyboardViewDelegate) {
         self.hostInputViewController = inputViewController
@@ -79,185 +74,90 @@ final class RelateOSKeyboardView: UIView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    // MARK: - Setup
-
     private func setupView() {
         backgroundColor = .clear
-        setupGlassBackground()
-        buildAlphaLayout()
-    }
 
-    private func setupGlassBackground() {
-        // iOS 26 Liquid Glass — UIBlurEffect with new .liquid style
-        let blurStyle: UIBlurEffect.Style
-        if #available(iOSApplicationExtension 26.0, *) {
-            // iOS 26 introduces new blur styles
-            blurStyle = .systemUltraThinMaterial
-        } else {
-            blurStyle = .systemUltraThinMaterial
-        }
+        let rootView = KeyboardGlassRootView(
+            state: state,
+            onKeyTap: { [weak self] key in
+                guard let self else { return }
+                if case .nextKeyboard = key.type {
+                    self.delegate?.keyboardViewDidTapGlobe(self)
+                    return
+                }
+                self.delegate?.keyboardView(self, didTapKey: key)
+            }
+        )
 
-        let blurEffect = UIBlurEffect(style: blurStyle)
-        glassContainer = UIVisualEffectView(effect: blurEffect)
-        glassContainer.translatesAutoresizingMaskIntoConstraints = false
-        glassContainer.layer.cornerRadius = 0
-        glassContainer.clipsToBounds = true
-        addSubview(glassContainer)
+        let host = UIHostingController(rootView: rootView)
+        host.view.backgroundColor = .clear
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        hostingController = host
 
+        addSubview(host.view)
         NSLayoutConstraint.activate([
-            glassContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            glassContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glassContainer.topAnchor.constraint(equalTo: topAnchor),
-            glassContainer.bottomAnchor.constraint(equalTo: bottomAnchor)
+            host.view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor)
         ])
     }
 
-    // MARK: - Layout Building
-
-    private func buildAlphaLayout() {
-        clearExistingKeys()
-
-        let rows = alphaRows(shifted: currentMode == .alphaShifted || currentMode == .alphaCapsLock)
-        buildRowStack(rows: rows)
+    func toggleShift() {
+        state.toggleShift()
     }
 
-    private func buildNumericLayout() {
-        clearExistingKeys()
-        buildRowStack(rows: numericRows())
+    func switchToNumericMode() {
+        state.currentMode = .numeric
     }
 
-    private func clearExistingKeys() {
-        keyRows.forEach { row in row.forEach { $0.removeFromSuperview() } }
-        keyRows.removeAll()
-        stackView?.removeFromSuperview()
+    func switchToAlphaMode() {
+        state.currentMode = .alpha
     }
 
-    private func buildRowStack(rows: [[KeyModel]]) {
-        stackView = UIStackView()
-        stackView.axis = .vertical
-        stackView.spacing = rowSpacing
-        stackView.distribution = .fill
-        stackView.alignment = .fill
-        stackView.translatesAutoresizingMaskIntoConstraints = false
+    func consumeSingleShiftIfNeeded() {
+        state.consumeSingleShiftIfNeeded()
+    }
 
-        for rowModels in rows {
-            let rowView = buildRow(models: rowModels)
-            stackView.addArrangedSubview(rowView)
-            rowView.heightAnchor.constraint(equalToConstant: keyHeight).isActive = true
+    func switchToEmojiMode() {
+        hostInputViewController.advanceToNextInputMode()
+    }
+
+    func updateForOrientation(isLandscape: Bool) {
+        state.isLandscape = isLandscape
+    }
+}
+
+// MARK: - SwiftUI State
+
+@available(iOSApplicationExtension 18.0, *)
+    private final class KeyboardGlassState: ObservableObject {
+    @Published var currentMode: KeyboardMode = .alpha
+    @Published var isLandscape = false
+
+    private var shiftTapCount = 0
+    private var lastShiftTapTime: Date?
+
+      let keySpacing: CGFloat = 5
+      let rowSpacing: CGFloat = 8
+    let cornerRadius: CGFloat = 7.5
+
+    var keyHeight: CGFloat {
+          isLandscape ? 38 : 50
+    }
+
+    func keyHeightForRow(_ rowIndex: Int) -> CGFloat {
+        // Bottom row (space bar row) is taller
+        let isBottomRow = rowIndex == (currentMode == .numeric ? 3 : 3)
+        if isBottomRow && !isLandscape {
+            return 56
         }
-
-        glassContainer.contentView.addSubview(stackView)
-        NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: glassContainer.contentView.leadingAnchor, constant: 4),
-            stackView.trailingAnchor.constraint(equalTo: glassContainer.contentView.trailingAnchor, constant: -4),
-            stackView.topAnchor.constraint(equalTo: glassContainer.contentView.topAnchor, constant: 8),
-            stackView.bottomAnchor.constraint(equalTo: glassContainer.contentView.bottomAnchor, constant: -8)
-        ])
+        return keyHeight
     }
-
-    private func buildRow(models: [KeyModel]) -> UIView {
-        let rowStack = UIStackView()
-        rowStack.axis = .horizontal
-        rowStack.spacing = keySpacing
-        rowStack.distribution = .fill
-        rowStack.alignment = .fill
-
-        var rowButtons: [KeyButton] = []
-
-        for model in models {
-            let button = KeyButton(model: model, cornerRadius: cornerRadius)
-            button.addTarget(self, action: #selector(keyTapped(_:)), for: .touchUpInside)
-            button.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
-
-            // Handle delete long press
-            if case .delete = model.type {
-                let longPress = UILongPressGestureRecognizer(
-                    target: self,
-                    action: #selector(deleteKeyLongPress(_:))
-                )
-                longPress.minimumPressDuration = 0.4
-                button.addGestureRecognizer(longPress)
-            }
-
-            // Width constraints
-            if let fixedWidth = model.width {
-                button.widthAnchor.constraint(equalToConstant: fixedWidth).isActive = true
-                button.setContentHuggingPriority(.required, for: .horizontal)
-                button.setContentCompressionResistancePriority(.required, for: .horizontal)
-            } else if model.isWide {
-                // Wide keys use flexible spacers — handled via intrinsic sizing
-                button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            } else {
-                button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            }
-
-            rowStack.addArrangedSubview(button)
-            rowButtons.append(button)
-        }
-
-        keyRows.append(rowButtons)
-        return rowStack
-    }
-
-    // MARK: - Key Actions
-
-    @objc private func keyTapped(_ button: KeyButton) {
-        button.animateTap()
-        delegate?.keyboardView(self, didTapKey: button.model)
-
-        // Track shift state
-        if case .shift = button.model.type {
-            return // handled in toggleShift()
-        }
-    }
-
-    @objc private func keyTouchDown(_ button: KeyButton) {
-        button.animatePress()
-        // Popup callout for alpha keys
-        if case .character = button.model.type {
-            showCallout(for: button)
-        }
-    }
-
-    private var activeCallout: KeyCalloutView?
-
-    private func showCallout(for button: KeyButton) {
-        activeCallout?.dismiss()
-        let callout = KeyCalloutView(button: button)
-        superview?.addSubview(callout)
-        callout.show()
-        activeCallout = callout
-
-        // Auto-dismiss
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak callout] in
-            callout?.dismiss()
-        }
-    }
-
-    private var deleteTimer: Timer?
-
-    @objc private func deleteKeyLongPress(_ gesture: UILongPressGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                let deleteKey = KeyModel(type: .delete, displayLabel: "⌫")
-                self.delegate?.keyboardView(self, didTapKey: deleteKey)
-            }
-        case .ended, .cancelled:
-            deleteTimer?.invalidate()
-            deleteTimer = nil
-        default:
-            break
-        }
-    }
-
-    // MARK: - Mode Switching
 
     func toggleShift() {
         let now = Date()
-        if let lastTap = lastShiftTapTime,
-           now.timeIntervalSince(lastTap) < 0.4 {
+        if let last = lastShiftTapTime, now.timeIntervalSince(last) < 0.4 {
             shiftTapCount += 1
         } else {
             shiftTapCount = 1
@@ -270,350 +170,224 @@ final class RelateOSKeyboardView: UIView {
         } else {
             currentMode = currentMode == .alphaShifted ? .alpha : .alphaShifted
         }
-
-        buildAlphaLayout()
-        updateShiftButtonAppearance()
     }
 
-    func switchToNumericMode() {
-        currentMode = .numeric
-        buildNumericLayout()
-    }
-
-    func switchToAlphaMode() {
+    func consumeSingleShiftIfNeeded() {
+        guard currentMode == .alphaShifted else { return }
         currentMode = .alpha
-        buildAlphaLayout()
     }
 
-    func switchToEmojiMode() {
-        // Advance to system emoji keyboard
-        hostInputViewController.advanceToNextInputMode()
-    }
-
-    private func updateShiftButtonAppearance() {
-        // Find shift button and update its visual state
-        for row in keyRows {
-            for button in row {
-                if case .shift = button.model.type {
-                    button.updateShiftState(currentMode)
-                }
-            }
+    var rows: [[KeyModel]] {
+        switch currentMode {
+        case .alpha, .alphaShifted, .alphaCapsLock:
+            return alphaRows(shifted: currentMode != .alpha)
+        case .numeric, .symbols, .emoji:
+            return numericRows()
         }
     }
 
-    // MARK: - Orientation
-
-    func updateForOrientation(isLandscape: Bool) {
-        // Adjust key heights for landscape
-        let newHeight: CGFloat = isLandscape ? 32 : 44
-        for rowView in stackView.arrangedSubviews {
-            rowView.constraints.first(where: { $0.firstAttribute == .height })?.constant = newHeight
+    func rowHorizontalInsets(_ rowIndex: Int) -> CGFloat {
+        switch rowIndex {
+        case 1: return 16
+        case 2: return 8
+        default: return 0
         }
-        layoutIfNeeded()
     }
 
-    // MARK: - Key Definitions
+    func accessibilityLabel(for model: KeyModel) -> String {
+        switch model.type {
+        case .character(let value):
+            return value
+        case .space:
+            return "Space"
+        case .delete:
+            return "Delete"
+        case .return:
+            return "Return"
+        case .nextKeyboard:
+            return "Next keyboard"
+        case .dismissKeyboard:
+            return "Dismiss keyboard"
+        case .shift:
+            return "Shift"
+        case .switchToNumeric:
+            return "Numbers"
+        case .switchToAlpha:
+            return "Letters"
+        case .emoji:
+            return "Emoji"
+        }
+    }
 
     private func alphaRows(shifted: Bool) -> [[KeyModel]] {
-        let row1Chars = ["q","w","e","r","t","y","u","i","o","p"]
-        let row2Chars = ["a","s","d","f","g","h","j","k","l"]
-        let row3Chars = ["z","x","c","v","b","n","m"]
+        let row1Chars = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
+        let row2Chars = ["a", "s", "d", "f", "g", "h", "j", "k", "l"]
+        let row3Chars = ["z", "x", "c", "v", "b", "n", "m"]
 
-        func charKey(_ s: String) -> KeyModel {
-            KeyModel(type: .character(shifted ? s.uppercased() : s),
-                     displayLabel: shifted ? s.uppercased() : s)
+        func charKey(_ s: String, row: Int, index: Int) -> KeyModel {
+            let value = shifted ? s.uppercased() : s
+            return KeyModel(
+                id: "alpha-\(row)-\(index)-\(value)",
+                type: .character(value),
+                displayLabel: value
+            )
         }
 
-        let row1 = row1Chars.map { charKey($0) }
-
-        let row2 = row2Chars.map { charKey($0) }
+        let row1 = row1Chars.enumerated().map { charKey($0.element, row: 1, index: $0.offset) }
+        let row2 = row2Chars.enumerated().map { charKey($0.element, row: 2, index: $0.offset) }
 
         var row3: [KeyModel] = []
-        row3.append(KeyModel(type: .shift, displayLabel: shifted ? "⇪" : "⇧",
-                             isSpecial: true, width: 42))
-        row3.append(contentsOf: row3Chars.map { charKey($0) })
-        row3.append(KeyModel(type: .delete, displayLabel: "⌫",
-                             isSpecial: true, width: 42))
+        row3.append(KeyModel(
+            id: "alpha-shift",
+            type: .shift,
+            displayLabel: shifted ? "⇪" : "⇧",
+            isSpecial: true,
+            width: 46
+        ))
+        row3.append(contentsOf: row3Chars.enumerated().map { charKey($0.element, row: 3, index: $0.offset) })
+        row3.append(KeyModel(
+            id: "alpha-delete",
+            type: .delete,
+            displayLabel: "⌫",
+            isSpecial: true,
+            width: 46
+        ))
 
         let row4: [KeyModel] = [
-            KeyModel(type: .switchToNumeric, displayLabel: "123", isSpecial: true, width: 44),
-            KeyModel(type: .nextKeyboard,    displayLabel: "🌐", isSpecial: true, width: 44),
-            KeyModel(type: .space,           displayLabel: "空格", isWide: true),
-            KeyModel(type: .return,          displayLabel: "換行", isSpecial: true, width: 88)
+              KeyModel(id: "alpha-123", type: .switchToNumeric, displayLabel: "123", isSpecial: true, width: 48),
+            KeyModel(id: "alpha-space", type: .space, displayLabel: "space", isWide: true),
+              KeyModel(id: "alpha-return", type: .return, displayLabel: "return", isSpecial: true, width: 96)
         ]
 
         return [row1, row2, row3, row4]
     }
 
     private func numericRows() -> [[KeyModel]] {
-        let row1Chars = ["1","2","3","4","5","6","7","8","9","0"]
-        let row2Chars = ["-","/",":",";","(",")",  "$","&","@","\""]
-        let row3Chars = [".",",","?","!","'"]
+        let row1Chars = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+        let row2Chars = ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""]
+        let row3Chars = [".", ",", "?", "!", "'"]
 
-        func charKey(_ s: String) -> KeyModel {
-            KeyModel(type: .character(s), displayLabel: s)
+        func charKey(_ s: String, row: Int, index: Int) -> KeyModel {
+            KeyModel(id: "num-\(row)-\(index)-\(s)", type: .character(s), displayLabel: s)
         }
 
-        let row1 = row1Chars.map { charKey($0) }
-        let row2 = row2Chars.map { charKey($0) }
+        let row1 = row1Chars.enumerated().map { charKey($0.element, row: 1, index: $0.offset) }
+        let row2 = row2Chars.enumerated().map { charKey($0.element, row: 2, index: $0.offset) }
 
         var row3: [KeyModel] = []
-        row3.append(KeyModel(type: .switchToNumeric, displayLabel: "#+=",
-                             isSpecial: true, width: 44))
-        row3.append(contentsOf: row3Chars.map { charKey($0) })
-        row3.append(KeyModel(type: .delete, displayLabel: "⌫",
-                             isSpecial: true, width: 44))
+          row3.append(KeyModel(id: "num-symbol", type: .switchToNumeric, displayLabel: "#+=", isSpecial: true, width: 48))
+        row3.append(contentsOf: row3Chars.enumerated().map { charKey($0.element, row: 3, index: $0.offset) })
+          row3.append(KeyModel(id: "num-delete", type: .delete, displayLabel: "⌫", isSpecial: true, width: 48))
 
         let row4: [KeyModel] = [
-            KeyModel(type: .switchToAlpha, displayLabel: "ABC", isSpecial: true, width: 44),
-            KeyModel(type: .nextKeyboard,  displayLabel: "🌐", isSpecial: true, width: 44),
-            KeyModel(type: .space,         displayLabel: "空格", isWide: true),
-            KeyModel(type: .return,        displayLabel: "換行", isSpecial: true, width: 88)
+              KeyModel(id: "num-abc", type: .switchToAlpha, displayLabel: "ABC", isSpecial: true, width: 48),
+            KeyModel(id: "num-space", type: .space, displayLabel: "space", isWide: true),
+              KeyModel(id: "num-return", type: .return, displayLabel: "return", isSpecial: true, width: 96)
         ]
 
         return [row1, row2, row3, row4]
     }
 }
 
-@available(iOSApplicationExtension 18.0, *)
-final class SpaceBarView: UIControl {
-
-    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
-    private let label = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        translatesAutoresizingMaskIntoConstraints = false
-        layer.cornerRadius = 18
-        layer.cornerCurve = .continuous
-        clipsToBounds = true
-
-        blurView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(blurView)
-        NSLayoutConstraint.activate([
-            blurView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            blurView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            blurView.topAnchor.constraint(equalTo: topAnchor),
-            blurView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-
-        label.text = "空格"
-        label.font = .systemFont(ofSize: 15, weight: .medium)
-        label.textColor = .label
-        label.translatesAutoresizingMaskIntoConstraints = false
-        blurView.contentView.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: blurView.contentView.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: blurView.contentView.centerYAnchor)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-}
-
-// MARK: - KeyButton
+// MARK: - SwiftUI Views
 
 @available(iOSApplicationExtension 18.0, *)
-final class KeyButton: UIButton {
+private struct KeyboardGlassRootView: View {
+    @ObservedObject var state: KeyboardGlassState
+    let onKeyTap: (KeyModel) -> Void
 
-    let model: KeyModel
-    private let cornerRadius: CGFloat
-
-    private var glassLayer: CALayer?
-
-    init(model: KeyModel, cornerRadius: CGFloat) {
-        self.model = model
-        self.cornerRadius = cornerRadius
-        super.init(frame: .zero)
-        configure()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func configure() {
-        layer.cornerRadius = cornerRadius
-        layer.cornerCurve = .continuous
-        clipsToBounds = false
-
-        // iOS 26 Liquid Glass style key background
-        applyLiquidGlassStyle()
-
-        // Label
-        setTitle(model.displayLabel, for: .normal)
-        titleLabel?.font = keyFont()
-        setTitleColor(keyTextColor(), for: .normal)
-        setTitleColor(keyTextColor().withAlphaComponent(0.5), for: .highlighted)
-    }
-
-    private func applyLiquidGlassStyle() {
-        if model.isSpecial {
-            // Special keys: darker glass
-            backgroundColor = UIColor { traits in
-                traits.userInterfaceStyle == .dark
-                    ? UIColor.white.withAlphaComponent(0.12)
-                    : UIColor.black.withAlphaComponent(0.15)
-            }
-        } else {
-            // Regular keys: lighter glass with subtle highlight
-            backgroundColor = UIColor { traits in
-                traits.userInterfaceStyle == .dark
-                    ? UIColor.white.withAlphaComponent(0.22)
-                    : UIColor.white.withAlphaComponent(0.85)
+    var body: some View {
+        Group {
+            if #available(iOSApplicationExtension 26.0, *) {
+                GlassEffectContainer {
+                    keyboardBody
+                }
+            } else {
+                keyboardBody
             }
         }
-
-        // Subtle shadow for depth
-        layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOffset = CGSize(width: 0, height: 1.5)
-        layer.shadowRadius = 1.5
-        layer.shadowOpacity = 0.18
-
-        // Top highlight for glass effect
-        addGlassHighlight()
-    }
-
-    private func addGlassHighlight() {
-        let highlight = CAGradientLayer()
-        highlight.colors = [
-            UIColor.white.withAlphaComponent(0.3).cgColor,
-            UIColor.white.withAlphaComponent(0.0).cgColor
-        ]
-        highlight.startPoint = CGPoint(x: 0.5, y: 0)
-        highlight.endPoint = CGPoint(x: 0.5, y: 0.5)
-        highlight.cornerRadius = cornerRadius
-        layer.addSublayer(highlight)
-        glassLayer = highlight
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        glassLayer?.frame = bounds
-    }
-
-    private func keyFont() -> UIFont {
-        if model.isWide || model.isSpecial {
-            return .systemFont(ofSize: 15, weight: .medium)
-        }
-        return .systemFont(ofSize: 22, weight: .light)
-    }
-
-    private func keyTextColor() -> UIColor {
-        UIColor { traits in
-            traits.userInterfaceStyle == .dark ? .white : UIColor(white: 0.12, alpha: 1)
-        }
-    }
-
-    func animateTap() {
-        UIView.animate(withDuration: 0.06, animations: {
-            self.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
-            self.alpha = 0.7
-        }) { _ in
-            UIView.animate(withDuration: 0.12, delay: 0, usingSpringWithDamping: 0.6,
-                           initialSpringVelocity: 0.8) {
-                self.transform = .identity
-                self.alpha = 1.0
+        .onAppear {
+            if UIAccessibility.isReduceTransparencyEnabled {
+                // Intentionally left for future state-driven fallback handling.
             }
         }
     }
 
-    func animatePress() {
-        UIView.animate(withDuration: 0.08) {
-            self.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+    private var keyboardBody: some View {
+        VStack(spacing: state.rowSpacing) {
+            ForEach(Array(state.rows.enumerated()), id: \.offset) { rowIndex, rowModels in
+                HStack(spacing: state.keySpacing) {
+                    ForEach(rowModels) { key in
+                        KeyboardGlassKeyView(
+                            key: key,
+                            cornerRadius: state.cornerRadius,
+                            accessibilityLabel: state.accessibilityLabel(for: key),
+                            onTap: { onKeyTap(key) }
+                        )
+                    }
+                }
+                .padding(.horizontal, state.rowHorizontalInsets(rowIndex))
+                .frame(maxHeight: .infinity)
+            }
         }
-    }
-
-    func updateShiftState(_ mode: KeyboardMode) {
-        switch mode {
-        case .alphaShifted:
-            backgroundColor = UIColor.systemBlue.withAlphaComponent(0.7)
-            setTitle("⇧", for: .normal)
-        case .alphaCapsLock:
-            backgroundColor = UIColor.systemBlue
-            setTitle("⇪", for: .normal)
-        default:
-            configure()
-        }
+        .padding(.horizontal, 6)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+        .frame(maxHeight: .infinity)
     }
 }
 
-// MARK: - Key Callout View (iOS 26 Liquid Glass popup)
-
 @available(iOSApplicationExtension 18.0, *)
-final class KeyCalloutView: UIView {
+private struct KeyboardGlassKeyView: View {
+    let key: KeyModel
+    let cornerRadius: CGFloat
+    let accessibilityLabel: String
+    let onTap: () -> Void
 
-    private let label = UILabel()
-    private weak var sourceButton: KeyButton?
-
-    init(button: KeyButton) {
-        self.sourceButton = button
-        super.init(frame: .zero)
-        setup()
+    var body: some View {
+        Button(action: onTap) {
+            Text(key.displayLabel)
+                .font(keyFont)
+                .foregroundStyle(key.isPrimaryAction ? Color.white : Color(uiColor: .label))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .buttonStyle(KeyboardKeyButtonStyle(isPrimary: key.isPrimaryAction, isSpecial: key.isSpecial, cornerRadius: cornerRadius))
+        .accessibilityLabel(accessibilityLabel)
+        .frame(maxWidth: key.isWide ? .infinity : nil)
+        .frame(width: key.width)
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    private var keyFont: Font {
+        if key.isWide || key.isSpecial {
+            return .system(size: 16, weight: .regular)
+        }
+        return .system(size: 25, weight: .regular)
+    }
+}
 
-    private func setup() {
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
-        blur.layer.cornerRadius = 10
-        blur.layer.cornerCurve = .continuous
-        blur.clipsToBounds = true
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(blur)
-        NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            blur.topAnchor.constraint(equalTo: topAnchor),
-            blur.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
+@available(iOSApplicationExtension 18.0, *)
+struct KeyboardKeyButtonStyle: ButtonStyle {
+    let isPrimary: Bool
+    let isSpecial: Bool
+    let cornerRadius: CGFloat
 
-        label.font = .systemFont(ofSize: 28, weight: .light)
-        label.textAlignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        blur.contentView.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: blur.contentView.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: blur.contentView.centerYAnchor)
-        ])
-
-        layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOpacity = 0.25
-        layer.shadowRadius = 8
-        layer.shadowOffset = CGSize(width: 0, height: 4)
-
-        if let button = sourceButton {
-            if case .character(let ch) = button.model.type {
-                label.text = ch.uppercased()
-            }
-
-            // Position above button
-            guard let superview = button.superview else { return }
-            let buttonFrame = superview.convert(button.frame, to: nil)
-            frame = CGRect(
-                x: buttonFrame.midX - 22,
-                y: buttonFrame.minY - 52,
-                width: 44,
-                height: 48
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                Group {
+                    if isPrimary {
+                        Color.blue
+                    } else if isSpecial {
+                        Color(uiColor: .systemGray4)
+                    } else {
+                        Color(uiColor: .systemBackground)
+                    }
+                }
             )
-        }
-
-        alpha = 0
-        transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-    }
-
-    func show() {
-        UIView.animate(withDuration: 0.12, delay: 0,
-                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5) {
-            self.alpha = 1
-            self.transform = .identity
-        }
-    }
-
-    func dismiss() {
-        UIView.animate(withDuration: 0.1) {
-            self.alpha = 0
-            self.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-        } completion: { _ in
-            self.removeFromSuperview()
-        }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: Color.black.opacity(0.35), radius: 0, x: 0, y: 1.0)
+            .scaleEffect(configuration.isPressed ? 1.15 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.65), value: configuration.isPressed)
+            .zIndex(configuration.isPressed ? 100 : 0)
     }
 }

@@ -17,7 +17,6 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
-		A9972B8B3B26333380F97E72 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9231C02CE81F820660CFE34F /* KeyboardViewController.swift */; };
 		B1E8A1C94F2F4B1F8C8B1011 /* RelateOSKeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E8A1C84F2F4B1F8C8B1011 /* RelateOSKeyboardViewController.swift */; };
 		B1E8A1CA4F2F4B1F8C8B1011 /* RelateOSKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E8A1CB4F2F4B1F8C8B1011 /* RelateOSKeyboardView.swift */; };
 		B1E8A1CC4F2F4B1F8C8B1011 /* SuggestionBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E8A1CD4F2F4B1F8C8B1011 /* SuggestionBarView.swift */; };
@@ -78,7 +77,6 @@
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		7B0C258539F5614E2DDDA409 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 		83B6135A4D576BFF7EEDFA4B /* KeyboardExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = KeyboardExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		9231C02CE81F820660CFE34F /* KeyboardViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeyboardViewController.swift; path = KeyboardExtension/KeyboardViewController.swift; sourceTree = "<group>"; };
 		B1E8A1C84F2F4B1F8C8B1011 /* RelateOSKeyboardViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RelateOSKeyboardViewController.swift; path = KeyboardExtension/RelateOSKeyboardViewController.swift; sourceTree = "<group>"; };
 		B1E8A1CB4F2F4B1F8C8B1011 /* RelateOSKeyboardView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RelateOSKeyboardView.swift; path = KeyboardExtension/RelateOSKeyboardView.swift; sourceTree = "<group>"; };
 		B1E8A1CD4F2F4B1F8C8B1011 /* SuggestionBarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SuggestionBarView.swift; path = KeyboardExtension/SuggestionBarView.swift; sourceTree = "<group>"; };
@@ -210,7 +208,6 @@
 				B1E8A1CB4F2F4B1F8C8B1011 /* RelateOSKeyboardView.swift */,
 				B1E8A1CD4F2F4B1F8C8B1011 /* SuggestionBarView.swift */,
 				B1E8A1CF4F2F4B1F8C8B1011 /* KeyboardAIEngine.swift */,
-				9231C02CE81F820660CFE34F /* KeyboardViewController.swift */,
 				460029B59DF23E4C6A51EFFD /* Info.plist */,
 				551C7D3A39523E598BE15CD9 /* KeyboardExtension.entitlements */,
 			);
@@ -461,7 +458,6 @@
 				B1E8A1CA4F2F4B1F8C8B1011 /* RelateOSKeyboardView.swift in Sources */,
 				B1E8A1CC4F2F4B1F8C8B1011 /* SuggestionBarView.swift in Sources */,
 				B1E8A1CE4F2F4B1F8C8B1011 /* KeyboardAIEngine.swift in Sources */,
-				A9972B8B3B26333380F97E72 /* KeyboardViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -106,7 +106,6 @@ coverage/
 
 # Secrets
 **/ios/**/KeyboardExtension/*.swift
-!**/ios/**/KeyboardExtension/KeyboardViewController.swift
 !**/ios/**/KeyboardExtension/RelateOSKeyboardViewController.swift
 !**/ios/**/KeyboardExtension/RelateOSKeyboardView.swift
 !**/ios/**/KeyboardExtension/SuggestionBarView.swift

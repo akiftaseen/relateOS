@@ -1,0 +1,63 @@
+--- ios/KeyboardExtension/SuggestionBarView.swift
++++ ios/KeyboardExtension/SuggestionBarView.swift
+@@ -204,9 +204,10 @@
+                         Image(systemName: "text.bubble")
+                             .font(.system(size: 14, weight: .semibold))
+-                            .frame(width: 36, height: 36)
++                            .foregroundStyle(Color(uiColor: .label))
++                            .frame(width: 44, height: 44)
+                     }
+-                    .keyboardGlassButtonStyle(isPrimary: false)
++                    .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 22))
+                     .accessibilityLabel("Subtext explanation")
+                     .transition(.scale.combined(with: .opacity))
+                 }
+@@ -241,31 +242,32 @@
+                         .multilineTextAlignment(.leading)
+                         .foregroundStyle(Color(uiColor: .label))
+                 }
+-                .padding(.horizontal, 12)
+-                .padding(.vertical, 7)
+-                .frame(minWidth: 120, alignment: .leading)
++                .padding(.horizontal, 14)
++                .padding(.vertical, 8)
++                .frame(minWidth: 120, maxHeight: .infinity, alignment: .leading)
+             }
+-            .keyboardGlassButtonStyle(isPrimary: false)
++            .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 12))
+             .accessibilityLabel(suggestion.text)
+         }
+     }
+ 
+     @available(iOSApplicationExtension 18.0, *)
+-    private extension View {
+-        @ViewBuilder
+-        func keyboardGlassButtonStyle(isPrimary: Bool) -> some View {
+-            if #available(iOSApplicationExtension 26.0, *) {
+-                if isPrimary {
+-                    self.buttonStyle(.glassProminent)
+-                } else {
+-                    self.buttonStyle(.glass)
+-                }
+-            } else {
+-                if isPrimary {
+-                    self.buttonStyle(.borderedProminent)
+-                } else {
+-                    self.buttonStyle(.bordered)
+-                }
+-            }
+-        }
++    struct AssistantBubbleButtonStyle: ButtonStyle {
++        let cornerRadius: CGFloat
++
++        func makeBody(configuration: Configuration) -> some View {
++            configuration.label
++                .background(Color(uiColor: .systemBackground).opacity(0.95))
++                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
++                .shadow(color: Color.black.opacity(0.2), radius: 0, x: 0, y: 1.0)
++                .scaleEffect(configuration.isPressed ? 1.05 : 1.0)
++                .animation(.spring(response: 0.2, dampingFraction: 0.65), value: configuration.isPressed)
++        }
+     }
+ 
+     // MARK: - Auxiliary UIKit Views

@@ -23,6 +23,11 @@ final class RelateOSKeyboardViewController: UIInputViewController {
 
     private var currentDraft: String = ""
     private var analysisTask: Task<Void, Never>?
+    private let startupSuggestions: [SuggestionModel] = [
+        SuggestionModel(text: "我明白", tone: .empathetic, confidence: 0.84, id: "startup-1"),
+        SuggestionModel(text: "慢慢講", tone: .gentle, confidence: 0.81, id: "startup-2"),
+        SuggestionModel(text: "直接講", tone: .direct, confidence: 0.79, id: "startup-3")
+    ]
 
     // AppGroup for sharing with main app
     private let sharedDefaults = UserDefaults(
@@ -33,12 +38,13 @@ final class RelateOSKeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        setupKeyboardView()
         setupSuggestionBar()
+        setupKeyboardView()
         setupSubtextTooltip()
         setupThinkingIndicator()
         bindAIEngine()
         configureAppearance()
+        showStartupState()
     }
 
     override func viewWillLayoutSubviews() {
@@ -65,7 +71,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
             keyboardView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             keyboardView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             keyboardView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            keyboardView.topAnchor.constraint(equalTo: view.topAnchor, constant: 88)
+            keyboardView.topAnchor.constraint(equalTo: suggestionBar.bottomAnchor, constant: 0)
         ])
     }
 
@@ -79,7 +85,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
             suggestionBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             suggestionBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             suggestionBar.topAnchor.constraint(equalTo: view.topAnchor),
-            suggestionBar.heightAnchor.constraint(equalToConstant: 54)
+            suggestionBar.heightAnchor.constraint(equalToConstant: 64)
         ])
     }
 
@@ -114,6 +120,16 @@ final class RelateOSKeyboardViewController: UIInputViewController {
         if #available(iOSApplicationExtension 26.0, *) {
             view.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.001)
         }
+    }
+
+    private func showStartupState() {
+        suggestionBar.updateSuggestions(startupSuggestions)
+        subtextTooltip.configure(
+            explanation: "先用建議回覆，系統會再按對話內容調整語氣。",
+            emotion: "中性",
+            healthDelta: nil
+        )
+        subtextTooltip.alpha = 0
     }
 
     private func updateLayout() {
@@ -190,6 +206,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
             thinkingTask.cancel()
             await MainActor.run { [weak self] in
                 self?.hideThinkingState()
+                self?.suggestionBar.updateSuggestions(self?.startupSuggestions ?? [])
             }
         }
     }
@@ -247,6 +264,7 @@ extension RelateOSKeyboardViewController: KeyboardViewDelegate {
         case .character(let char):
             proxy.insertText(char)
             HapticEngine.shared.keyTap()
+            view.consumeSingleShiftIfNeeded()
 
         case .space:
             proxy.insertText(" ")
@@ -291,17 +309,12 @@ extension RelateOSKeyboardViewController: KeyboardViewDelegate {
 extension RelateOSKeyboardViewController: SuggestionBarDelegate {
 
     func suggestionBar(_ bar: SuggestionBarView, didSelectSuggestion suggestion: SuggestionModel) {
-        // Replace current draft or insert at cursor
         let proxy = textDocumentProxy
-
-        // Delete existing draft text
-        if !currentDraft.isEmpty {
-            let draftLength = currentDraft.count
-            for _ in 0..<draftLength {
-                proxy.deleteBackward()
-            }
+        
+        // Insert suggestion at cursor; do not delete full pre-context from the host field.
+        if let before = proxy.documentContextBeforeInput, !before.isEmpty, !before.hasSuffix(" ") {
+            proxy.insertText(" ")
         }
-
         proxy.insertText(suggestion.text)
         HapticEngine.shared.suggestionAccepted()
 
