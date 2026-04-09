@@ -130,6 +130,24 @@ final class SuggestionBarView: UIView {
     func setManualAnalyzeEnabled(_ enabled: Bool) {
         state.setManualAnalyzeEnabled(enabled)
     }
+
+    func preferredHeight(isLandscape: Bool) -> CGFloat {
+        var height: CGFloat = isLandscape ? 64 : 74
+
+        if state.showAnalyzeButton {
+            height += 4
+        }
+
+        if state.showSubtextButton {
+            height += 4
+        }
+
+        if let top = state.suggestions.first, top.text.count > 28 {
+            height += 2
+        }
+
+        return min(height, isLandscape ? 76 : 86)
+    }
 }
 
 // MARK: - SwiftUI State
@@ -181,26 +199,6 @@ private struct SuggestionBarRootView: View {
             headerStrip
             contentRow
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(UIColor.secondarySystemBackground).opacity(0.9),
-                            Color(UIColor.tertiarySystemBackground).opacity(0.72)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.16), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
     }
@@ -343,21 +341,9 @@ struct AssistantBubbleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
-                LinearGradient(
-                    colors: [
-                        Color(UIColor.systemBackground).opacity(0.98),
-                        Color(UIColor.secondarySystemBackground).opacity(0.9)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                Color(UIColor.secondarySystemBackground).opacity(0.7)
             )
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.14), radius: 6, x: 0, y: 3)
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .animation(.spring(response: 0.2, dampingFraction: 0.65), value: configuration.isPressed)
             .opacity(configuration.isPressed ? 0.95 : 1.0)

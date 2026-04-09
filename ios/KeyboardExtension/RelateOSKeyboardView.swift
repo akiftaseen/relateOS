@@ -139,19 +139,18 @@ final class RelateOSKeyboardView: UIView {
     private var shiftTapCount = 0
     private var lastShiftTapTime: Date?
 
-      let keySpacing: CGFloat = 5
-      let rowSpacing: CGFloat = 8
+    let keySpacing: CGFloat = 8
+    let rowSpacing: CGFloat = 8
     let cornerRadius: CGFloat = 7.5
 
     var keyHeight: CGFloat {
-          isLandscape ? 38 : 50
+        isLandscape ? 44 : 54
     }
 
     func keyHeightForRow(_ rowIndex: Int) -> CGFloat {
-        // Bottom row (space bar row) is taller
-        let isBottomRow = rowIndex == (currentMode == .numeric ? 3 : 3)
-        if isBottomRow && !isLandscape {
-            return 56
+        let isBottomRow = rowIndex == 3
+        if isBottomRow {
+            return isLandscape ? 44 : 50
         }
         return keyHeight
     }
@@ -190,7 +189,7 @@ final class RelateOSKeyboardView: UIView {
     func rowHorizontalInsets(_ rowIndex: Int) -> CGFloat {
         switch rowIndex {
         case 1: return 16
-        case 2: return 8
+        case 2: return 0
         default: return 0
         }
     }
@@ -242,23 +241,24 @@ final class RelateOSKeyboardView: UIView {
             id: "alpha-shift",
             type: .shift,
             displayLabel: shifted ? "⇪" : "⇧",
-            isSpecial: true,
-            width: 46
+            isSpecial: false,
+            width: 52
         ))
         row3.append(contentsOf: row3Chars.enumerated().map { charKey($0.element, row: 3, index: $0.offset) })
         row3.append(KeyModel(
             id: "alpha-delete",
             type: .delete,
             displayLabel: "⌫",
-            isSpecial: true,
-            width: 46
+            isSpecial: false,
+            width: 52
         ))
 
-        let row4: [KeyModel] = [
-              KeyModel(id: "alpha-123", type: .switchToNumeric, displayLabel: "123", isSpecial: true, width: 48),
-            KeyModel(id: "alpha-space", type: .space, displayLabel: "space", isWide: true),
-              KeyModel(id: "alpha-return", type: .return, displayLabel: "return", isSpecial: true, width: 96)
-        ]
+                let row4: [KeyModel] = [
+                        KeyModel(id: "alpha-123", type: .switchToNumeric, displayLabel: "123", isSpecial: true, width: 48),
+                        KeyModel(id: "alpha-emoji", type: .emoji, displayLabel: "😊", isSpecial: true, width: 44),
+                        KeyModel(id: "alpha-space", type: .space, displayLabel: "", isWide: true),
+                        KeyModel(id: "alpha-return", type: .return, displayLabel: "↩︎", isSpecial: true, width: 64)
+                ]
 
         return [row1, row2, row3, row4]
     }
@@ -276,15 +276,16 @@ final class RelateOSKeyboardView: UIView {
         let row2 = row2Chars.enumerated().map { charKey($0.element, row: 2, index: $0.offset) }
 
         var row3: [KeyModel] = []
-          row3.append(KeyModel(id: "num-symbol", type: .switchToNumeric, displayLabel: "#+=", isSpecial: true, width: 48))
+                    row3.append(KeyModel(id: "num-symbol", type: .switchToNumeric, displayLabel: "#+=", isSpecial: true, width: 52))
         row3.append(contentsOf: row3Chars.enumerated().map { charKey($0.element, row: 3, index: $0.offset) })
-          row3.append(KeyModel(id: "num-delete", type: .delete, displayLabel: "⌫", isSpecial: true, width: 48))
+                    row3.append(KeyModel(id: "num-delete", type: .delete, displayLabel: "⌫", isSpecial: false, width: 52))
 
-        let row4: [KeyModel] = [
-              KeyModel(id: "num-abc", type: .switchToAlpha, displayLabel: "ABC", isSpecial: true, width: 48),
-            KeyModel(id: "num-space", type: .space, displayLabel: "space", isWide: true),
-              KeyModel(id: "num-return", type: .return, displayLabel: "return", isSpecial: true, width: 96)
-        ]
+                let row4: [KeyModel] = [
+                        KeyModel(id: "num-abc", type: .switchToAlpha, displayLabel: "ABC", isSpecial: true, width: 48),
+                        KeyModel(id: "num-emoji", type: .emoji, displayLabel: "😊", isSpecial: true, width: 44),
+                        KeyModel(id: "num-space", type: .space, displayLabel: "", isWide: true),
+                        KeyModel(id: "num-return", type: .return, displayLabel: "↩︎", isSpecial: true, width: 64)
+                ]
 
         return [row1, row2, row3, row4]
     }
@@ -328,12 +329,12 @@ private struct KeyboardGlassRootView: View {
                     }
                 }
                 .padding(.horizontal, state.rowHorizontalInsets(rowIndex))
-                .frame(maxHeight: .infinity)
+                .frame(height: state.keyHeightForRow(rowIndex), alignment: .center)
             }
         }
         .padding(.horizontal, 6)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
+        .padding(.top, 0)
+        .padding(.bottom, 0)
         .frame(maxHeight: .infinity)
     }
 }
@@ -359,6 +360,15 @@ private struct KeyboardGlassKeyView: View {
     }
 
     private var keyFont: Font {
+        switch key.type {
+        case .shift, .delete, .return:
+            return .system(size: 22, weight: .semibold)
+        case .emoji:
+            return .system(size: 20, weight: .regular)
+        default:
+            break
+        }
+
         if key.isWide || key.isSpecial {
             return .system(size: 16, weight: .regular)
         }
@@ -378,8 +388,6 @@ struct KeyboardKeyButtonStyle: ButtonStyle {
                 Group {
                     if isPrimary {
                         Color.blue
-                    } else if isSpecial {
-                        Color(uiColor: .systemGray4)
                     } else {
                         Color(uiColor: .systemBackground)
                     }

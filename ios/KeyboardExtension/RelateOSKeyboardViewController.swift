@@ -32,6 +32,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
     private var suggestionBar: SuggestionBarView!
     private var subtextTooltip: SubtextTooltipView!
     private var thinkingIndicator: ThinkingIndicatorView!
+    private var suggestionBarHeightConstraint: NSLayoutConstraint?
 
     private let aiEngine = KeyboardAIEngine()
     private let healthScoreProcessor = HealthScoreProcessor()
@@ -104,9 +105,12 @@ final class RelateOSKeyboardViewController: UIInputViewController {
         NSLayoutConstraint.activate([
             suggestionBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             suggestionBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            suggestionBar.topAnchor.constraint(equalTo: view.topAnchor),
-            suggestionBar.heightAnchor.constraint(equalToConstant: 96)
+            suggestionBar.topAnchor.constraint(equalTo: view.topAnchor)
         ])
+
+        let heightConstraint = suggestionBar.heightAnchor.constraint(equalToConstant: 74)
+        heightConstraint.isActive = true
+        suggestionBarHeightConstraint = heightConstraint
     }
 
     private func setupSubtextTooltip() {
@@ -156,15 +160,21 @@ final class RelateOSKeyboardViewController: UIInputViewController {
 
     private func updateLayout() {
         let isLandscape = view.bounds.width > view.bounds.height
+
+        let dynamicSuggestionHeight = suggestionBar.preferredHeight(isLandscape: isLandscape)
+        suggestionBarHeightConstraint?.constant = dynamicSuggestionHeight
+
+        let keyboardContentHeight: CGFloat = isLandscape ? 202 : 256
+        let targetTotalHeight = dynamicSuggestionHeight + keyboardContentHeight
         
         if customHeightConstraint == nil {
-            let constraint = view.heightAnchor.constraint(equalToConstant: 310)
+            let constraint = view.heightAnchor.constraint(equalToConstant: targetTotalHeight)
             constraint.priority = .init(999)
             constraint.isActive = true
             customHeightConstraint = constraint
         }
         
-        customHeightConstraint?.constant = isLandscape ? 252 : 324
+        customHeightConstraint?.constant = targetTotalHeight
         keyboardView.updateForOrientation(isLandscape: isLandscape)
     }
 
