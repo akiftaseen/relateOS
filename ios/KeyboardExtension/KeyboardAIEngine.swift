@@ -5,6 +5,91 @@ import Foundation
 import UIKit
 import CryptoKit
 
+// MARK: - Local Health Scoring
+
+struct InteractionToken: Sendable {
+    let positiveWeight: Double
+    let negativeWeight: Double
+    let isFaceSaving: Bool
+    let isConflict: Bool
+}
+
+actor HealthScoreProcessor {
+    private var conversationalTokens: [InteractionToken] = []
+
+    private let alpha: Double = 1.2
+    private let beta: Double = 0.8
+    private let maxTokenWindow = 200
+
+    private let positiveMarkers = [
+        "thanks", "thank you", "appreciate", "sorry", "understand", "agree", "love",
+        "多謝", "唔該", "明白", "對唔住", "辛苦", "我會改", "我聽到"
+    ]
+
+    private let negativeMarkers = [
+        "whatever", "shut up", "hate", "annoying", "useless", "leave me alone",
+        "算啦", "隨便", "你厲害", "有點意思", "唔想講", "煩", "冇用"
+    ]
+
+    private let faceSavingMarkers = [
+        "let's", "maybe", "can we", "i feel", "i hear you",
+        "不如", "可唔可以", "慢慢", "我明白", "俾個面", "我聽到"
+    ]
+
+    private let conflictMarkers = [
+        "always", "never", "you're wrong", "your fault",
+        "成日", "永遠", "都係你", "你錯", "算吧", "離婚"
+    ]
+
+    func append(text: String) {
+        let token = tokenize(text: text)
+        conversationalTokens.append(token)
+        if conversationalTokens.count > maxTokenWindow {
+            conversationalTokens.removeFirst(conversationalTokens.count - maxTokenWindow)
+        }
+    }
+
+    func calculateHScore() -> Double {
+        let baseSentiment = conversationalTokens.reduce(0.0) { accumulated, token in
+            accumulated + (token.positiveWeight - token.negativeWeight)
+        }
+
+        let validationCount = conversationalTokens.filter { $0.isFaceSaving }.count
+        let conflictCount = conversationalTokens.filter { $0.isConflict }.count
+        let resolutionRatio = Double(validationCount) / Double(conflictCount + 1)
+
+        return (alpha * baseSentiment) + (beta * resolutionRatio)
+    }
+
+    func latestDelta() -> Float {
+        let raw = calculateHScore()
+        let bounded = tanh(raw / 6.0)
+        return Float(bounded)
+    }
+
+    private func tokenize(text: String) -> InteractionToken {
+        let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            return InteractionToken(positiveWeight: 0, negativeWeight: 0, isFaceSaving: false, isConflict: false)
+        }
+
+        let positiveMatches = positiveMarkers.filter { normalized.contains($0) }.count
+        let negativeMatches = negativeMarkers.filter { normalized.contains($0) }.count
+        let faceSaving = faceSavingMarkers.contains { normalized.contains($0) }
+        let conflict = conflictMarkers.contains { normalized.contains($0) }
+
+        let positiveWeight = Double(positiveMatches) * 0.9 + (faceSaving ? 0.4 : 0)
+        let negativeWeight = Double(negativeMatches) * 1.0 + (conflict ? 0.5 : 0)
+
+        return InteractionToken(
+            positiveWeight: positiveWeight,
+            negativeWeight: negativeWeight,
+            isFaceSaving: faceSaving,
+            isConflict: conflict
+        )
+    }
+}
+
 // MARK: - AI Result Models
 
 struct AIAnalysisResult {
@@ -16,7 +101,7 @@ struct AIAnalysisResult {
 
 // MARK: - AI Engine
 
-final class KeyboardAIEngine {
+actor KeyboardAIEngine {
 
     private let proxyURL = URL(string: "https://relateos-ai-proxy.relateos.workers.dev/analyze-intent")!
     private let session: URLSession
@@ -153,7 +238,16 @@ final class KeyboardAIEngine {
 
         let subtext = json["subtext_explanation"] as? String
         let emotion = json["detected_emotion"] as? String
-        let healthDelta = json["health_delta"] as? Float
+        let healthDelta: Float?
+        if let value = json["health_delta"] as? Float {
+            healthDelta = value
+        } else if let value = json["health_delta"] as? Double {
+            healthDelta = Float(value)
+        } else if let value = json["health_delta"] as? NSNumber {
+            healthDelta = value.floatValue
+        } else {
+            healthDelta = nil
+        }
 
         return AIAnalysisResult(
             suggestions: suggestions,
@@ -183,12 +277,19 @@ struct Message: Codable {
     let detectedLanguage: String?
 }
 
+struct HealthTrendSample: Codable {
+    let delta: Float
+    let timestamp: Date
+}
+
 // MARK: - Message Capture Manager
 
 final class MessageCaptureManager {
 
     private let sharedDefaults = UserDefaults(suiteName: "group.com.relateos.keyboard")
     private let maxStoredMessages = 20
+    private let healthSamplesKey = "health_delta_samples"
+    private let maxStoredHealthSamples = 500
 
     // MARK: - Read
 
@@ -235,10 +336,54 @@ final class MessageCaptureManager {
         }
         return log
     }
+
+    // MARK: - Health Trend Samples
+
+    func appendHealthSample(delta: Float, at timestamp: Date = Date()) {
+        var samples = readHealthSamples(days: 14)
+        samples.append(HealthTrendSample(delta: delta, timestamp: timestamp))
+
+        let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? .distantPast
+        samples = samples.filter { $0.timestamp >= cutoff }
+
+        if samples.count > maxStoredHealthSamples {
+            samples = Array(samples.suffix(maxStoredHealthSamples))
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(samples) {
+            sharedDefaults?.set(data, forKey: healthSamplesKey)
+        }
+    }
+
+    func readHealthSamples(days: Int = 7) -> [HealthTrendSample] {
+        guard let data = sharedDefaults?.data(forKey: healthSamplesKey) else { return [] }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let allSamples = try? decoder.decode([HealthTrendSample].self, from: data) else { return [] }
+
+        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? .distantPast
+        return allSamples.filter { $0.timestamp >= cutoff }
+    }
+
+    func sevenDayTrendSummary() -> (average: Float, latest: Float, count: Int) {
+        let samples = readHealthSamples(days: 7)
+        guard !samples.isEmpty else { return (0, 0, 0) }
+
+        let sum = samples.reduce(Float(0)) { partial, sample in
+            partial + sample.delta
+        }
+        let average = sum / Float(samples.count)
+        let latest = samples.last?.delta ?? 0
+        return (average, latest, samples.count)
+    }
 }
 
 // MARK: - Haptic Engine
 
+@MainActor
 final class HapticEngine {
 
     static let shared = HapticEngine()

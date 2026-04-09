@@ -1,1 +1,1 @@
-#import "GeneratedPluginRegistrant.h"
+// Intentionally left minimal for native Swift runtime migration.

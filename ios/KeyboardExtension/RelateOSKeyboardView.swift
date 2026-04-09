@@ -6,6 +6,7 @@ import SwiftUI
 
 // MARK: - Delegate Protocol
 
+@MainActor
 @available(iOSApplicationExtension 18.0, *)
 protocol KeyboardViewDelegate: AnyObject {
     func keyboardView(_ view: RelateOSKeyboardView, didTapKey key: KeyModel)

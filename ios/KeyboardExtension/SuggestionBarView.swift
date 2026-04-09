@@ -57,6 +57,7 @@ enum SuggestionTone: String {
 
 // MARK: - Delegate
 
+@MainActor
 @available(iOSApplicationExtension 18.0, *)
 protocol SuggestionBarDelegate: AnyObject {
     func suggestionBar(_ bar: SuggestionBarView, didSelectSuggestion suggestion: SuggestionModel)
@@ -162,7 +163,7 @@ private struct SuggestionBarRootView: View {
         barBody
             .overlay(alignment: .top) {
                 Rectangle()
-                    .fill(Color(uiColor: .separator).opacity(0.4))
+                    .fill(Color(UIColor.separator).opacity(0.4))
                     .frame(height: 0.33)
             }
     }
@@ -194,7 +195,7 @@ private struct SuggestionBarRootView: View {
                 Button(action: onSubtextTap) {
                     Image(systemName: "text.bubble")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color(uiColor: .label))
+                        .foregroundStyle(Color(UIColor.label))
                         .frame(width: 48, height: 48)
                 }
                 .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 24))
@@ -221,17 +222,17 @@ private struct SuggestionBubbleView: View {
                     Text(suggestion.tone.label)
                         .font(.system(size: 10, weight: .semibold))
                 }
-                .foregroundStyle(Color(uiColor: suggestion.tone.color))
+                .foregroundStyle(Color(suggestion.tone.color))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
-                .background(Color(uiColor: suggestion.tone.color).opacity(0.16))
+                .background(Color(suggestion.tone.color).opacity(0.16))
                 .clipShape(Capsule())
 
                 Text(suggestion.text)
                     .font(.system(size: 15, weight: .medium))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .foregroundStyle(Color(uiColor: .label))
+                    .foregroundStyle(Color(UIColor.label))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
@@ -248,7 +249,7 @@ struct AssistantBubbleButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(Color(uiColor: .systemBackground).opacity(0.95))
+            .background(Color(UIColor.systemBackground).opacity(0.95))
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .shadow(color: Color.black.opacity(0.2), radius: 0, x: 0, y: 1.0)
             .scaleEffect(configuration.isPressed ? 1.05 : 1.0)

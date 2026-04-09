@@ -18,6 +18,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
     private var thinkingIndicator: ThinkingIndicatorView!
 
     private let aiEngine = KeyboardAIEngine()
+    private let healthScoreProcessor = HealthScoreProcessor()
     private let captureManager = MessageCaptureManager()
     private var cancellables = Set<AnyCancellable>()
 
@@ -193,6 +194,9 @@ final class RelateOSKeyboardViewController: UIInputViewController {
         }
 
         do {
+            await healthScoreProcessor.append(text: draft)
+            let localHealthDelta = await healthScoreProcessor.latestDelta()
+
             let result = try await aiEngine.analyze(
                 draft: draft,
                 context: context
@@ -200,18 +204,23 @@ final class RelateOSKeyboardViewController: UIInputViewController {
             thinkingTask.cancel()
 
             await MainActor.run { [weak self] in
-                self?.handleAnalysisResult(result)
+                self?.handleAnalysisResult(result, localHealthDelta: localHealthDelta)
             }
         } catch {
             thinkingTask.cancel()
             await MainActor.run { [weak self] in
                 self?.hideThinkingState()
                 self?.suggestionBar.updateSuggestions(self?.startupSuggestions ?? [])
+                let fallbackDelta = self?.localizedFallbackHealthDelta(for: draft) ?? 0
+                self?.sharedDefaults?.set(fallbackDelta, forKey: "latest_health_delta")
+                self?.sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "latest_health_delta_timestamp")
+                self?.captureManager.appendHealthSample(delta: fallbackDelta)
+                self?.publishHealthTrendSummary()
             }
         }
     }
 
-    private func handleAnalysisResult(_ result: AIAnalysisResult) {
+    private func handleAnalysisResult(_ result: AIAnalysisResult, localHealthDelta: Float) {
         hideThinkingState()
         suggestionBar.updateSuggestions(result.suggestions)
 
@@ -225,10 +234,30 @@ final class RelateOSKeyboardViewController: UIInputViewController {
         }
 
         // Write health delta to AppGroup for main app
-        if let delta = result.healthDelta {
-            sharedDefaults?.set(delta, forKey: "latest_health_delta")
-            sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "latest_health_delta_timestamp")
+        let resolvedDelta = result.healthDelta ?? localHealthDelta
+        sharedDefaults?.set(resolvedDelta, forKey: "latest_health_delta")
+        sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "latest_health_delta_timestamp")
+        captureManager.appendHealthSample(delta: resolvedDelta)
+        publishHealthTrendSummary()
+    }
+
+    private func localizedFallbackHealthDelta(for text: String) -> Float {
+        let lowered = text.lowercased()
+        if lowered.contains("sorry") || lowered.contains("明白") || lowered.contains("多謝") {
+            return 0.12
         }
+        if lowered.contains("whatever") || lowered.contains("算啦") || lowered.contains("你錯") {
+            return -0.16
+        }
+        return 0
+    }
+
+    private func publishHealthTrendSummary() {
+        let summary = captureManager.sevenDayTrendSummary()
+        sharedDefaults?.set(summary.average, forKey: "health_delta_7d_average")
+        sharedDefaults?.set(summary.latest, forKey: "health_delta_7d_latest")
+        sharedDefaults?.set(summary.count, forKey: "health_delta_7d_count")
+        sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "health_delta_7d_timestamp")
     }
 
     private func showThinkingState() {
