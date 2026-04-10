@@ -149,6 +149,8 @@ actor KeyboardAIEngine {
         return [
             "draft": draft,
             "messages": messages,
+            "analysis_mode": "interpretation_only",
+            "guidance": "Return likely meaning, intent, and risk cues. Do not generate a full reply the user can paste.",
             "locale": Locale.current.identifier,
             "ts": ISO8601DateFormatter().string(from: Date())
         ]

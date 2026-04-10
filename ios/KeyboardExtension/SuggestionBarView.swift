@@ -13,6 +13,31 @@ struct SuggestionModel {
     let id: String
 }
 
+enum AssistantRiskLevel {
+    case unknown
+    case okay
+    case caution
+    case risky
+
+    var title: String {
+        switch self {
+        case .unknown: return "Assessing"
+        case .okay: return "OK to send"
+        case .caution: return "Use caution"
+        case .risky: return "High risk"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unknown: return .secondary
+        case .okay: return .green
+        case .caution: return .orange
+        case .risky: return .red
+        }
+    }
+}
+
 enum SuggestionTone: String {
     case gentle     = "gentle"
     case direct     = "direct"
@@ -131,8 +156,16 @@ final class SuggestionBarView: UIView {
         state.setManualAnalyzeEnabled(enabled)
     }
 
+    func updateContextSummary(_ summary: String) {
+        state.updateContextSummary(summary)
+    }
+
+    func updateRiskDelta(_ delta: Float?) {
+        state.updateRiskDelta(delta)
+    }
+
     func preferredHeight(isLandscape: Bool) -> CGFloat {
-        var height: CGFloat = isLandscape ? 64 : 74
+        var height: CGFloat = isLandscape ? 54 : 62
 
         if state.showAnalyzeButton {
             height += 4
@@ -146,7 +179,7 @@ final class SuggestionBarView: UIView {
             height += 2
         }
 
-        return min(height, isLandscape ? 76 : 86)
+        return min(height, isLandscape ? 62 : 74)
     }
 }
 
@@ -158,6 +191,8 @@ private final class SuggestionBarState: ObservableObject {
     @Published var isThinking = false
     @Published var showSubtextButton = false
     @Published var showAnalyzeButton = false
+    @Published var contextSummary = "No recent chat context"
+    @Published var riskLevel: AssistantRiskLevel = .unknown
 
     func updateSuggestions(_ newSuggestions: [SuggestionModel]) {
         withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
@@ -183,6 +218,27 @@ private final class SuggestionBarState: ObservableObject {
             showAnalyzeButton = enabled
         }
     }
+
+    func updateContextSummary(_ summary: String) {
+        let normalized = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        contextSummary = normalized.isEmpty ? "No recent chat context" : normalized
+    }
+
+    func updateRiskDelta(_ delta: Float?) {
+        guard let delta else {
+            riskLevel = .unknown
+            return
+        }
+
+        switch delta {
+        case ..<(-0.12):
+            riskLevel = .risky
+        case -0.12..<0.08:
+            riskLevel = .caution
+        default:
+            riskLevel = .okay
+        }
+    }
 }
 
 // MARK: - SwiftUI Views
@@ -195,29 +251,30 @@ private struct SuggestionBarRootView: View {
     let onAnalyzeTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             headerStrip
-            contentRow
+            contextStrip
+            insightStrip
         }
         .padding(.horizontal, 6)
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
     }
 
     private var headerStrip: some View {
         HStack(spacing: 8) {
-            Label("AI suggestions", systemImage: "sparkles")
+            Label("Assistant", systemImage: "person.text.rectangle")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color(UIColor.label))
 
             Spacer()
 
-            Text(state.isThinking ? "Thinking" : "Ready")
+            Text(state.riskLevel.title)
                 .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(state.isThinking ? Color.orange : Color.green)
+                .foregroundStyle(state.riskLevel.color)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(
-                    (state.isThinking ? Color.orange : Color.green)
+                    state.riskLevel.color
                         .opacity(0.16)
                 )
                 .clipShape(Capsule())
@@ -239,98 +296,119 @@ private struct SuggestionBarRootView: View {
         }
     }
 
-    private var contentRow: some View {
-        HStack(spacing: 10) {
-            actionRail
+    private var contextStrip: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(state.suggestions, id: \.id) { suggestion in
-                        SuggestionBubbleView(suggestion: suggestion) {
-                            onSuggestionTap(suggestion)
-                        }
-                        .opacity(state.isThinking ? 0.55 : 1.0)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .padding(.horizontal, 2)
-            }
-            .frame(height: 52)
+            Text(state.contextSummary)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
 
             if state.isThinking {
                 ProgressView()
-                    .controlSize(.small)
-                    .padding(.trailing, 2)
             }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color(UIColor.secondarySystemBackground).opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var insightStrip: some View {
+        VStack(spacing: 4) {
+            CoachingLineView(
+                title: "Likely meaning",
+                message: primaryGuidance,
+                accent: .blue
+            )
+
+            CoachingLineView(
+                title: "Risk signal",
+                message: verdictSubtitle,
+                accent: state.riskLevel.color
+            )
+
+            CoachingLineView(
+                title: "Subtext cue",
+                message: secondaryGuidance,
+                accent: .secondary
+            )
+
+            if state.showAnalyzeButton || state.showSubtextButton {
+                HStack(spacing: 8) {
+                    if state.showAnalyzeButton {
+                        Button(action: onAnalyzeTap) {
+                            Label("Ask AI", systemImage: "waveform.path.ecg")
+                                .font(.system(size: 10, weight: .semibold))
+                                .frame(maxWidth: .infinity, minHeight: 24)
+                        }
+                        .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 9))
+                    }
+
+                    if state.showSubtextButton {
+                        Button(action: onSubtextTap) {
+                            Label("Why", systemImage: "questionmark.circle")
+                                .font(.system(size: 10, weight: .semibold))
+                                .frame(maxWidth: .infinity, minHeight: 24)
+                        }
+                        .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 9))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color(UIColor.secondarySystemBackground).opacity(0.42))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var verdictSubtitle: String {
+        switch state.riskLevel {
+        case .unknown: return "Waiting for chat context"
+        case .okay: return "Likely safe, but keep it natural"
+        case .caution: return "Tone may need softening"
+        case .risky: return "Reword before sending"
         }
     }
 
-    @ViewBuilder
-    private var actionRail: some View {
-        if state.showAnalyzeButton || state.showSubtextButton {
-            HStack(spacing: 8) {
-                if state.showAnalyzeButton {
-                    Button(action: onAnalyzeTap) {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Color(UIColor.label))
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 12))
-                    .accessibilityLabel("Analyze current text")
-                    .transition(.scale.combined(with: .opacity))
-                }
+    private var primaryGuidance: String {
+        state.suggestions.first?.text ?? "Insufficient context to infer meaning yet."
+    }
 
-                if state.showSubtextButton {
-                    Button(action: onSubtextTap) {
-                        Image(systemName: "text.bubble")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Color(UIColor.label))
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 12))
-                    .accessibilityLabel("Subtext explanation")
-                    .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .frame(width: state.showAnalyzeButton && state.showSubtextButton ? 96 : 48)
+    private var secondaryGuidance: String {
+        if state.suggestions.count > 1 {
+            return state.suggestions[1].text
         }
+        return "Look for tone mismatch before you reply."
     }
 }
 
 @available(iOSApplicationExtension 18.0, *)
-private struct SuggestionBubbleView: View {
-    let suggestion: SuggestionModel
-    let onTap: () -> Void
+private struct CoachingLineView: View {
+    let title: String
+    let message: String
+    let accent: Color
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 5) {
-                    Image(systemName: suggestion.tone.icon)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(suggestion.tone.color))
-                    Text(suggestion.tone.label)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(suggestion.tone.color))
-                    Spacer(minLength: 6)
-                    Text("\(Int(suggestion.confidence * 100))%")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(Color(UIColor.secondaryLabel))
-                }
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(accent)
 
-                Text(suggestion.text)
-                    .font(.system(size: 14, weight: .medium))
-                    .lineLimit(1)
-                    .multilineTextAlignment(.leading)
-                    .foregroundStyle(Color(UIColor.label))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(minWidth: 158, maxWidth: 200, minHeight: 52, maxHeight: 52, alignment: .leading)
+            Text(message)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(Color(UIColor.label))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
         }
-        .buttonStyle(AssistantBubbleButtonStyle(cornerRadius: 12))
-        .accessibilityLabel(suggestion.text)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
     }
 }
 

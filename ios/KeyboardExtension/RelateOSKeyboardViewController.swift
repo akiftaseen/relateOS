@@ -148,10 +148,12 @@ final class RelateOSKeyboardViewController: UIInputViewController {
 
     private func showStartupState() {
         suggestionBar.updateSuggestions(startupSuggestions)
+        suggestionBar.updateRiskDelta(nil)
+        suggestionBar.updateContextSummary("Waiting for recent messages")
         subtextTooltip.configure(
             explanation: KeyboardRuntimeConfig.isManualAnalysis
-                ? "按 Analyze 後提供即時回覆建議。"
-                : "先用建議回覆，系統會再按對話內容調整語氣。",
+                ? "按 Ask AI 取得對對方語氣與意圖的解讀。"
+                : "系統會解讀對話意圖與風險，不會代你寫完整回覆。",
             emotion: "中性",
             healthDelta: nil
         )
@@ -164,7 +166,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
         let dynamicSuggestionHeight = suggestionBar.preferredHeight(isLandscape: isLandscape)
         suggestionBarHeightConstraint?.constant = dynamicSuggestionHeight
 
-        let keyboardContentHeight: CGFloat = isLandscape ? 202 : 256
+        let keyboardContentHeight: CGFloat = isLandscape ? 232 : 310
         let targetTotalHeight = dynamicSuggestionHeight + keyboardContentHeight
         
         if customHeightConstraint == nil {
@@ -203,6 +205,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
 
         // Read shared message history from AppGroup
         let messageHistory = captureManager.readMessageHistory()
+        suggestionBar.updateContextSummary(contextSummary(from: messageHistory))
 
         if !KeyboardRuntimeConfig.isManualAnalysis {
             // Trigger AI analysis with debounce in automatic mode.
@@ -291,6 +294,7 @@ final class RelateOSKeyboardViewController: UIInputViewController {
                 self?.hideThinkingState()
                 self?.suggestionBar.updateSuggestions(self?.startupSuggestions ?? [])
                 let fallbackDelta = self?.localizedFallbackHealthDelta(for: draft) ?? 0
+                self?.suggestionBar.updateRiskDelta(fallbackDelta)
                 self?.sharedDefaults?.set(fallbackDelta, forKey: "latest_health_delta")
                 self?.sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "latest_health_delta_timestamp")
                 self?.captureManager.appendHealthSample(delta: fallbackDelta)
@@ -314,10 +318,27 @@ final class RelateOSKeyboardViewController: UIInputViewController {
 
         // Write health delta to AppGroup for main app
         let resolvedDelta = result.healthDelta ?? localHealthDelta
+        suggestionBar.updateRiskDelta(resolvedDelta)
         sharedDefaults?.set(resolvedDelta, forKey: "latest_health_delta")
         sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "latest_health_delta_timestamp")
         captureManager.appendHealthSample(delta: resolvedDelta)
         publishHealthTrendSummary()
+    }
+
+    private func contextSummary(from messages: [Message]) -> String {
+        guard !messages.isEmpty else {
+            return "No chat context yet"
+        }
+
+        let recent = messages.suffix(3)
+        let fragments = recent.map { message in
+            let prefix = message.isOutgoing ? "You" : "Them"
+            let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let preview = String(trimmed.prefix(22))
+            return "\(prefix): \(preview)"
+        }
+
+        return fragments.joined(separator: " | ")
     }
 
     private func localizedFallbackHealthDelta(for text: String) -> Float {
@@ -419,22 +440,24 @@ extension RelateOSKeyboardViewController: KeyboardViewDelegate {
 extension RelateOSKeyboardViewController: SuggestionBarDelegate {
 
     func suggestionBar(_ bar: SuggestionBarView, didSelectSuggestion suggestion: SuggestionModel) {
-        let proxy = textDocumentProxy
-        
-        // Insert suggestion at cursor; do not delete full pre-context from the host field.
-        if let before = proxy.documentContextBeforeInput, !before.isEmpty, !before.hasSuffix(" ") {
-            proxy.insertText(" ")
-        }
-        proxy.insertText(suggestion.text)
+        // Assistant guidance mode: do not auto-type any suggested text for the user.
         HapticEngine.shared.suggestionAccepted()
+
+        subtextTooltip.configure(
+            explanation: "可能意思：\(suggestion.text)\n這是解讀，不是代寫；請用你自己語氣表達。",
+            emotion: nil,
+            healthDelta: nil
+        )
+        UIView.animate(withDuration: 0.2) {
+            self.subtextTooltip.alpha = 1
+            self.subtextTooltip.transform = .identity
+        }
 
         // Log selection for model improvement (stored locally)
         captureManager.logSuggestionSelected(
             suggestion: suggestion,
             context: currentDraft
         )
-
-        hideSubtextTooltip()
     }
 
     func suggestionBarDidTapSubtextIndicator(_ bar: SuggestionBarView) {
